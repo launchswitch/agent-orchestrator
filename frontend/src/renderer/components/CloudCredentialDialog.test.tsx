@@ -1,6 +1,70 @@
-import { describe, it, expect } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useCredentialDialogStore } from "../stores/credential-dialog-store";
+import { CloudCredentialDialog } from "./CloudCredentialDialog";
+
+const { getAvailableAgentsMock } = vi.hoisted(() => ({
+	getAvailableAgentsMock: vi.fn(),
+}));
+
+vi.mock("../hooks/useCloudCp", () => ({
+	useCloudCp: () => ({ client: { getAvailableAgents: getAvailableAgentsMock } }),
+}));
+
+vi.mock("../hooks/useCloudOrg", () => ({
+	useCloudOrg: () => ({
+		org: { id: "org-1", slug: "test", displayName: "Test", role: "admin" },
+	}),
+}));
+
+function renderDialog() {
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	return render(
+		<QueryClientProvider client={queryClient}>
+			<CloudCredentialDialog />
+		</QueryClientProvider>,
+	);
+}
 
 describe("CloudCredentialDialog", () => {
+	beforeEach(() => {
+		getAvailableAgentsMock.mockReset();
+		useCredentialDialogStore.setState({ open: true });
+	});
+
+	it("shows a loading state instead of an empty agent selector", () => {
+		getAvailableAgentsMock.mockReturnValue(new Promise(() => undefined));
+
+		renderDialog();
+
+		expect(screen.getByRole("status")).toHaveTextContent("Loading coding agents");
+		expect(screen.queryByLabelText("Coding agent")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Connect" })).not.toBeInTheDocument();
+	});
+
+	it("explains an agent-loading failure and retries the request", async () => {
+		getAvailableAgentsMock
+			.mockRejectedValueOnce(new Error("control plane unavailable"))
+			.mockResolvedValueOnce({
+				agents: [
+					{ id: "claude-code", provider: "anthropic", hasValidCred: false, validationState: "missing" },
+				],
+			});
+
+		renderDialog();
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("Could not load coding agents");
+		expect(screen.queryByLabelText("Coding agent")).not.toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+		expect(await screen.findByLabelText("Coding agent")).toBeEnabled();
+		expect(getAvailableAgentsMock).toHaveBeenCalledTimes(2);
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+
 	it("should define agent metadata with all required agents", () => {
 		const AGENT_METADATA = {
 			"claude-code": {

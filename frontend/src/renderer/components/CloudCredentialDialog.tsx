@@ -102,7 +102,8 @@ export function CloudCredentialDialog() {
 		setError(null);
 	};
 
-	const canSubmit = phase !== "submitting" && secret.trim() !== "" && org !== undefined;
+	const agentsReady = availableAgentsQuery.isSuccess && availableAgentsQuery.data.length > 0;
+	const canSubmit = agentsReady && phase !== "submitting" && secret.trim() !== "" && org !== undefined;
 
 	const submit = async () => {
 		if (!canSubmit || org === undefined) return;
@@ -142,6 +143,21 @@ export function CloudCredentialDialog() {
 						<p role="status" className="text-control leading-4 text-success">
 							{t("cloudCredential.connected")}
 						</p>
+					</div>
+				) : availableAgentsQuery.isLoading ? (
+					<div className={settingsDialogBodyClass}>
+						<p role="status" className="text-control leading-4 text-settings-muted">
+							{t("cloudCredential.loadingAgents")}
+						</p>
+					</div>
+				) : availableAgentsQuery.isError || !agentsReady ? (
+					<div className={cn(settingsDialogBodyClass, "flex flex-col items-start gap-3")}>
+						<p role="alert" className="text-control leading-4 text-error">
+							{t("cloudCredential.agentsLoadFailed")}
+						</p>
+						<Button type="button" variant="outline" onClick={() => void availableAgentsQuery.refetch()}>
+							{t("cloudCredential.retry")}
+						</Button>
 					</div>
 				) : (
 					<div className={cn(settingsDialogBodyClass, "flex flex-col gap-4")}>
@@ -208,7 +224,7 @@ export function CloudCredentialDialog() {
 							{phase === "success" ? t("cloudCredential.done") : t("cloudCredential.cancel")}
 						</Button>
 					</DialogClose>
-					{phase !== "success" ? (
+					{phase !== "success" && agentsReady ? (
 						<Button type="button" variant="footer-primary" disabled={!canSubmit} onClick={() => void submit()}>
 							{phase === "submitting" ? t("cloudCredential.connecting") : t("cloudCredential.connect")}
 						</Button>
