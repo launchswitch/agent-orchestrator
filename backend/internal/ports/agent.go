@@ -295,6 +295,18 @@ type WaitingTerminalActivityDetector interface {
 	ContinuouslyDetectTerminalActivityWhileWaiting() bool
 }
 
+// ViewportTerminalActivityDetector is an optional capability for adapters whose
+// markers are only trustworthy in the rendered current screen. Their TUIs
+// repaint with cursor-control sequences instead of newlines, so a raw
+// scrollback tail can both miss the live composer/footer and retain stale
+// status rows from background work that has already left the screen. When the
+// runtime can supply a rendered viewport, the observer must prefer it over raw
+// terminal history.
+type ViewportTerminalActivityDetector interface {
+	TerminalActivityDetector
+	DetectTerminalActivityFromViewport() bool
+}
+
 // PromptReadinessHints describes when an after-start prompt should be sent.
 // Empty patterns mean "send immediately" unless the adapter also implements
 // TerminalActivityDetector, in which case AO waits for an authoritative idle

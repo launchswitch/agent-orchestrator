@@ -2,6 +2,7 @@ package activity
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -133,7 +134,7 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 		session.Activity.State != domain.ActivityWaitingInput {
 		return
 	}
-	output, err := o.runtime.GetOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
+	output, err := o.activityOutput(ctx, agent, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID})
 	if err != nil {
 		o.logger.Debug("activity observer: terminal output unavailable", "session", session.ID, "err", err)
 		return
@@ -158,4 +159,30 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	if err != nil {
 		o.logger.Error("activity observer: reconciliation failed", "session", session.ID, "err", err)
 	}
+}
+
+// activityOutput reads the terminal evidence the adapter's detector expects.
+// Viewport detectors must not be fed raw scrollback: full-screen TUIs repaint
+// with cursor-control sequences instead of newlines, so the newest
+// newline-terminated history may omit the live composer/footer while still
+// carrying stale status rows from background work that has already finished.
+// A host predating rendered-surface support is the one case where raw history
+// is the best available evidence.
+func (o *Observer) activityOutput(ctx context.Context, agent ports.Agent, handle ports.RuntimeHandle) (string, error) {
+	viewport, ok := agent.(ports.ViewportTerminalActivityDetector)
+	if !ok || !viewport.DetectTerminalActivityFromViewport() {
+		return o.runtime.GetOutput(ctx, handle, o.outputLines)
+	}
+	styled, ok := o.runtime.(ports.StyledTerminalOutputReader)
+	if !ok {
+		return o.runtime.GetOutput(ctx, handle, o.outputLines)
+	}
+	output, err := styled.GetStyledOutput(ctx, handle, o.outputLines)
+	if err == nil {
+		return output, nil
+	}
+	if errors.Is(err, ports.ErrStyledTerminalOutputUnavailable) {
+		return o.runtime.GetOutput(ctx, handle, o.outputLines)
+	}
+	return "", err
 }

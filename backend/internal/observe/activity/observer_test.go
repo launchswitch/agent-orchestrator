@@ -48,6 +48,20 @@ func (f *fakeRuntime) GetOutput(context.Context, ports.RuntimeHandle, int) (stri
 	return f.output, f.err
 }
 
+// fakeViewportRuntime adds the optional rendered-surface capability so tests
+// can prove which source a detector is fed.
+type fakeViewportRuntime struct {
+	fakeRuntime
+	styledOutput string
+	styledErr    error
+	styledCalls  int
+}
+
+func (f *fakeViewportRuntime) GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
+	f.styledCalls++
+	return f.styledOutput, f.styledErr
+}
+
 type fakeAgents map[domain.AgentHarness]ports.Agent
 
 func (f fakeAgents) Agent(harness domain.AgentHarness) (ports.Agent, bool) {
@@ -246,6 +260,103 @@ const claudeStuckActiveScreen = "⏺ Login expired · Please run /login\n" +
 	"────────────────────────────────────────────────\n" +
 	"\n" +
 	"  ⏵⏵ bypass permissions on (shift+tab to cycle) · PR #4090\n"
+
+func TestPollReconcilesMuseFromRenderedViewport(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	session := activeSession(now, domain.HarnessMuse)
+	session.Activity = domain.Activity{State: domain.ActivityActive, LastActivityAt: now.Add(-time.Minute)}
+	// The raw ring tail of a full-screen Muse TUI is repaint fragments that
+	// omit the live composer/footer; only the rendered viewport is evidence.
+	runtime := &fakeViewportRuntime{
+		fakeRuntime:  fakeRuntime{output: "stale raw history with neither composer nor footer"},
+		styledOutput: museIdleViewport,
+	}
+	sink := &fakeSink{}
+	observer := New(
+		fakeSessions{rows: []domain.SessionRecord{session}},
+		sink,
+		runtime,
+		fakeAgents{domain.HarnessMuse: muse.New()},
+		Config{Clock: func() time.Time { return now }, Logger: testLogger()},
+	)
+
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.calls != 0 || runtime.styledCalls != 1 {
+		t.Fatalf("viewport detector reads: raw=%d styled=%d, want 0/1", runtime.calls, runtime.styledCalls)
+	}
+	if len(sink.signals) != 1 || sink.signals[0].State != domain.ActivityIdle || sink.signals[0].Event != "terminal-idle" {
+		t.Fatalf("unexpected reconciliation: %+v", sink.signals)
+	}
+}
+
+func TestPollFallsBackToRawMuseOutputForLegacyHost(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	session := activeSession(now, domain.HarnessMuse)
+	session.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: now.Add(-time.Second)}
+	session.UpdatedAt = now.Add(-time.Second)
+	// A detached host predating rendered-surface support is the one case where
+	// raw history remains the fallback evidence.
+	runtime := &fakeViewportRuntime{
+		fakeRuntime: fakeRuntime{output: "◇ Finishing up (25s · esc to interrupt)\n"},
+		styledErr:   ports.ErrStyledTerminalOutputUnavailable,
+	}
+	sink := &fakeSink{}
+	observer := New(
+		fakeSessions{rows: []domain.SessionRecord{session}},
+		sink,
+		runtime,
+		fakeAgents{domain.HarnessMuse: muse.New()},
+		Config{Clock: func() time.Time { return now }, Logger: testLogger()},
+	)
+
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.styledCalls != 1 || runtime.calls != 1 {
+		t.Fatalf("legacy fallback reads: styled=%d raw=%d, want 1/1", runtime.styledCalls, runtime.calls)
+	}
+	if len(sink.signals) != 1 || sink.signals[0].State != domain.ActivityActive || sink.signals[0].Event != "terminal-active" {
+		t.Fatalf("unexpected reconciliation: %+v", sink.signals)
+	}
+}
+
+func TestPollKeepsRawOutputForNonViewportHarnesses(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	runtime := &fakeViewportRuntime{
+		fakeRuntime:  fakeRuntime{output: "› Write tests for @filename\n\ngpt-5.6-sol low · ~/project\n"},
+		styledOutput: "› not evidence for this harness\ngpt-5.6-sol low · ~/project\n",
+	}
+	sink := &fakeSink{}
+	observer := New(
+		fakeSessions{rows: []domain.SessionRecord{activeSession(now, domain.HarnessCodex)}},
+		sink,
+		runtime,
+		fakeAgents{domain.HarnessCodex: codex.New()},
+		Config{Clock: func() time.Time { return now }, Logger: testLogger()},
+	)
+
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.styledCalls != 0 || runtime.calls != 1 {
+		t.Fatalf("non-viewport detector reads: styled=%d raw=%d, want 0/1", runtime.styledCalls, runtime.calls)
+	}
+	if len(sink.signals) != 1 || sink.signals[0].State != domain.ActivityIdle {
+		t.Fatalf("unexpected reconciliation: %+v", sink.signals)
+	}
+}
+
+// museIdleViewport is the rendered Muse 1.3 screen after a completed turn:
+// transcript above newline-free repaint chrome, the ❯ composer, and the
+// footer. It is the screen a session stranded in durable "active" shows.
+const museIdleViewport = "◆ Worked for 9m 03s · 3:17 PM\n" +
+	"\n" +
+	"────────────────────────────────────────────────────────────────\n" +
+	"❯\n" +
+	"────────────────────────────────────────────────────────────────\n" +
+	"  muse-spark-1.3-contributor · max · …/montamer2-90 · YOLO\n"
 
 func TestPollReconcilesStaleClaudeCodeAfterAbortedTurn(t *testing.T) {
 	now := time.Unix(500, 0).UTC()
