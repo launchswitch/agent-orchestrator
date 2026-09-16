@@ -245,6 +245,47 @@ func readNativeTranscriptTailWithOpen(ctx context.Context, path, configDir strin
 	return result, earlierOmitted || partialRecord || incompleteFinal, true
 }
 
+// boundTranscriptExcerpt applies the standard transcript tail ceiling to an
+// adapter-rendered excerpt, retaining the newest lines with the omission
+// marker. It mirrors readNativeTranscriptTailWithOpen's limits without the
+// JSONL record handling, since excerpts are already prose.
+func boundTranscriptExcerpt(text string) (string, bool) {
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	truncated := false
+	if len(lines) > handoffTranscriptMaxLines {
+		lines = lines[len(lines)-handoffTranscriptMaxLines:]
+		truncated = true
+	}
+	budget := handoffTranscriptMaxBytes
+	if truncated {
+		budget -= len(transcriptOmittedMarker) + 1
+	}
+	for len(lines) > 0 {
+		joined := strings.Join(lines, "\n")
+		if len(joined) <= budget {
+			if !truncated {
+				return joined, false
+			}
+			return transcriptOmittedMarker + "\n" + joined, true
+		}
+		if len(lines) == 1 {
+			prefix := transcriptOmittedMarker + "\n" + transcriptPartialMarker + "\n"
+			suffixBudget := handoffTranscriptMaxBytes - len(prefix)
+			data := []byte(lines[0])
+			if len(data) > suffixBudget {
+				data = data[len(data)-suffixBudget:]
+			}
+			return prefix + string(bytes.ToValidUTF8(data, []byte("?"))), true
+		}
+		lines = lines[1:]
+		if !truncated {
+			truncated = true
+			budget -= len(transcriptOmittedMarker) + 1
+		}
+	}
+	return "", truncated
+}
+
 func normalizeHistoricalContext(data []byte) string {
 	value := string(bytes.ToValidUTF8(data, []byte("?")))
 	value = ansiOSC.ReplaceAllString(value, "")

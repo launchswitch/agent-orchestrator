@@ -576,6 +576,7 @@ type switchTestAgent struct {
 	authStatus          ports.AgentAuthStatus
 	authErr             error
 	locateTranscript    func(ports.NativeSessionRef) (string, bool, error)
+	transcriptExcerpt   func(string) (string, bool, error)
 	onHooks             func()
 	hookCalls           int
 	cleanupCalls        int
@@ -844,6 +845,13 @@ func (a *switchTestAgent) LocateTranscript(_ context.Context, ref ports.NativeSe
 		return "", false, nil
 	}
 	return a.locateTranscript(ref)
+}
+
+func (a *switchTestAgent) TranscriptExcerpt(_ context.Context, path string) (string, bool, error) {
+	if a.transcriptExcerpt == nil {
+		return "", false, nil
+	}
+	return a.transcriptExcerpt(path)
 }
 
 func (a *switchTestAgent) GetLaunchCommand(_ context.Context, cfg ports.LaunchConfig) ([]string, error) {
@@ -2137,6 +2145,145 @@ func TestCaptureSourceTranscriptFactDoesNotReadTailWhenSemanticHandoffExists(t *
 	}
 	if status != domain.AgentSwitchSourceTranscriptAvailable {
 		t.Fatalf("transcript status = %q, want available", status)
+	}
+}
+
+func TestCaptureSourceTranscriptFactPrefersAdapterExcerpt(t *testing.T) {
+	configDir := t.TempDir()
+	path := filepath.Join(configDir, "session.jsonl")
+	if err := os.WriteFile(path, []byte("RAW_SENTINEL\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var excerptPath string
+	agent := &switchTestAgent{
+		locateTranscript: func(ports.NativeSessionRef) (string, bool, error) {
+			return path, true, nil
+		},
+		transcriptExcerpt: func(located string) (string, bool, error) {
+			excerptPath = located
+			return "EXCERPT_SENTINEL", false, nil
+		},
+	}
+	manager := New(Deps{})
+	got, status := manager.captureSourceTranscriptFact(
+		context.Background(),
+		agent,
+		domain.AgentNativeSession{NativeSessionID: "session-1", ConfigDir: configDir},
+		true,
+	)
+	if status != domain.AgentSwitchSourceTranscriptAvailable {
+		t.Fatalf("transcript status = %q, want available", status)
+	}
+	if got == nil || got.Tail != "EXCERPT_SENTINEL" || got.Truncated {
+		t.Fatalf("transcript fact = %+v, want excerpt tail", got)
+	}
+	if excerptPath != got.Path {
+		t.Fatalf("excerpt path = %q, want located %q", excerptPath, got.Path)
+	}
+}
+
+func TestCaptureSourceTranscriptFactFallsBackToRawTail(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		excerpt func(string) (string, bool, error)
+	}{
+		{"excerpt error", func(string) (string, bool, error) { return "", false, errors.New("export failed") }},
+		{"blank excerpt", func(string) (string, bool, error) { return "  \n", false, nil }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			configDir := t.TempDir()
+			path := filepath.Join(configDir, "session.jsonl")
+			if err := os.WriteFile(path, []byte("RAW_SENTINEL\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			agent := &switchTestAgent{
+				locateTranscript: func(ports.NativeSessionRef) (string, bool, error) {
+					return path, true, nil
+				},
+				transcriptExcerpt: tt.excerpt,
+			}
+			manager := New(Deps{})
+			got, status := manager.captureSourceTranscriptFact(
+				context.Background(),
+				agent,
+				domain.AgentNativeSession{NativeSessionID: "session-1", ConfigDir: configDir},
+				true,
+			)
+			if status != domain.AgentSwitchSourceTranscriptAvailable {
+				t.Fatalf("transcript status = %q, want available", status)
+			}
+			if got == nil || !strings.Contains(got.Tail, "RAW_SENTINEL") {
+				t.Fatalf("transcript fact = %+v, want raw tail fallback", got)
+			}
+		})
+	}
+}
+
+func TestCaptureSourceTranscriptFactMergesExcerptTruncated(t *testing.T) {
+	configDir := t.TempDir()
+	path := filepath.Join(configDir, "session.jsonl")
+	if err := os.WriteFile(path, []byte("RAW_SENTINEL\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agent := &switchTestAgent{
+		locateTranscript: func(ports.NativeSessionRef) (string, bool, error) {
+			return path, true, nil
+		},
+		transcriptExcerpt: func(string) (string, bool, error) {
+			return "short excerpt with provider gaps", true, nil
+		},
+	}
+	manager := New(Deps{})
+	got, _ := manager.captureSourceTranscriptFact(
+		context.Background(),
+		agent,
+		domain.AgentNativeSession{NativeSessionID: "session-1", ConfigDir: configDir},
+		true,
+	)
+	if got == nil || !got.Truncated || !strings.Contains(got.Tail, "provider gaps") {
+		t.Fatalf("transcript fact = %+v, want truncated excerpt", got)
+	}
+	if strings.Contains(got.Tail, transcriptOmittedMarker) {
+		t.Fatalf("short excerpt unexpectedly bounded:\n%s", got.Tail)
+	}
+}
+
+func TestCaptureSourceTranscriptFactBoundsOversizedExcerpt(t *testing.T) {
+	configDir := t.TempDir()
+	path := filepath.Join(configDir, "session.jsonl")
+	if err := os.WriteFile(path, []byte("RAW_SENTINEL\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var lines strings.Builder
+	for i := 0; i < handoffTranscriptMaxLines+10; i++ {
+		fmt.Fprintf(&lines, "excerpt-line-%d\n", i)
+	}
+	agent := &switchTestAgent{
+		locateTranscript: func(ports.NativeSessionRef) (string, bool, error) {
+			return path, true, nil
+		},
+		transcriptExcerpt: func(string) (string, bool, error) {
+			return lines.String(), false, nil
+		},
+	}
+	manager := New(Deps{})
+	got, _ := manager.captureSourceTranscriptFact(
+		context.Background(),
+		agent,
+		domain.AgentNativeSession{NativeSessionID: "session-1", ConfigDir: configDir},
+		true,
+	)
+	if got == nil || !got.Truncated {
+		t.Fatalf("transcript fact = %+v, want truncated", got)
+	}
+	if !strings.HasPrefix(got.Tail, transcriptOmittedMarker+"\n") {
+		t.Fatalf("excerpt tail missing omission marker: %.120q", got.Tail)
+	}
+	if strings.Contains(got.Tail, "excerpt-line-0") || !strings.Contains(got.Tail, fmt.Sprintf("excerpt-line-%d", handoffTranscriptMaxLines+9)) {
+		t.Fatalf("excerpt tail kept the wrong window: %.200q", got.Tail)
+	}
+	if len(got.Tail) > handoffTranscriptMaxBytes {
+		t.Fatalf("excerpt bytes = %d, want <= %d", len(got.Tail), handoffTranscriptMaxBytes)
 	}
 }
 

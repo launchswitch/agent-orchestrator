@@ -1724,6 +1724,13 @@ func (m *Manager) captureSourceTranscriptFact(ctx context.Context, agent ports.A
 	if !includeTail {
 		return &switchTranscriptFact{Path: path}, domain.AgentSwitchSourceTranscriptAvailable
 	}
+	if excerpter, ok := agent.(ports.AgentTranscriptExcerpter); ok {
+		if text, excerptTruncated, excerptErr := excerpter.TranscriptExcerpt(ctx, path); excerptErr == nil && strings.TrimSpace(text) != "" {
+			if tail, boundTruncated := boundTranscriptExcerpt(text); tail != "" {
+				return &switchTranscriptFact{Path: path, Tail: tail, Truncated: excerptTruncated || boundTruncated}, domain.AgentSwitchSourceTranscriptAvailable
+			}
+		}
+	}
 	openFile := m.openTranscriptFile
 	if openFile == nil {
 		openFile = os.Open

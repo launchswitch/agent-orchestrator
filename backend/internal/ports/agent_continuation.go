@@ -81,3 +81,15 @@ type AgentNativeSessionProber interface {
 type AgentTranscriptLocator interface {
 	LocateTranscript(ctx context.Context, ref NativeSessionRef) (path string, ok bool, err error)
 }
+
+// AgentTranscriptExcerpter renders a provider-owned transcript as bounded
+// human-readable text. It is consulted only after LocateTranscript succeeds,
+// and transcriptPath is the validated absolute path it returned. The excerpt
+// replaces the raw JSONL tail in handoff context; truncated reports
+// provider-level gaps (omitted, live-only, or unparseable records) and the
+// caller ORs its own bounding flag. Implementations must treat the transcript
+// as read-only and return an error (or blank text) when nothing usable can be
+// rendered so the caller falls back to the raw tail.
+type AgentTranscriptExcerpter interface {
+	TranscriptExcerpt(ctx context.Context, transcriptPath string) (text string, truncated bool, err error)
+}
