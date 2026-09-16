@@ -344,6 +344,69 @@ func TestManagedHookCommandsRestoreSanitizedAORoute(t *testing.T) {
 	}
 }
 
+func TestManagedHookCommandsCarryReservedRuntimeLaunchID(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv(aoRunFileEnvVar, "")
+	cfg := ports.WorkspaceHookConfig{
+		DataDir: dataDir, SessionID: "sess-1",
+		Env: map[string]string{aoRuntimeLaunchIDEnvVar: "launch-9"},
+	}
+	if err := (&Plugin{}).GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	path, err := museManagedHooksPath(dataDir, cfg.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // test-owned path
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file museHooksFile
+	if err := json.Unmarshal(data, &file); err != nil {
+		t.Fatal(err)
+	}
+	for nativeEvent, aoEvent := range map[string]string{
+		"SessionStart":      "session-start",
+		"UserPromptSubmit":  "user-prompt-submit",
+		"PermissionRequest": "permission-request",
+		"Stop":              "stop",
+	} {
+		groups := file.Hooks[nativeEvent]
+		if len(groups) != 1 || len(groups[0].Hooks) != 1 {
+			t.Fatalf("hooks[%q] = %#v, want one command", nativeEvent, groups)
+		}
+		command := groups[0].Hooks[0].Command
+		want := "env AO_SESSION_ID='sess-1' AO_DATA_DIR=" + museShellQuote(dataDir) +
+			" AO_RUNTIME_LAUNCH_ID='launch-9' ao hooks muse " + aoEvent
+		if command != want {
+			t.Fatalf("hooks[%q] command = %q, want %q", nativeEvent, command, want)
+		}
+	}
+}
+
+func TestManagedHookCommandsOmitBlankRuntimeLaunchID(t *testing.T) {
+	t.Setenv(aoRunFileEnvVar, "")
+	cfg := ports.WorkspaceHookConfig{
+		DataDir: t.TempDir(), SessionID: "sess-1",
+		Env: map[string]string{aoRuntimeLaunchIDEnvVar: "   "},
+	}
+	if err := (&Plugin{}).GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	path, err := museManagedHooksPath(cfg.DataDir, cfg.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // test-owned path
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), aoRuntimeLaunchIDEnvVar) {
+		t.Fatalf("blank launch id leaked into managed hooks:\n%s", data)
+	}
+}
+
 func TestManagedHooksRequireAOOwnedPathInputs(t *testing.T) {
 	p := &Plugin{resolvedBinary: "muse"}
 	for _, cfg := range []ports.WorkspaceHookConfig{
