@@ -119,6 +119,10 @@ func TestHookConversationFactsNativeTurnIdentity(t *testing.T) {
 		{"Claude oversized ID", domain.HarnessClaudeCode, "stop", `{"prompt_id":"` + strings.Repeat("a", 257) + `"}`, ""},
 		{"missing ID", domain.HarnessCodex, "stop", `{}`, ""},
 		{"oversized ID", domain.HarnessCodex, "stop", `{"turn_id":"` + strings.Repeat("a", 257) + `"}`, ""},
+		{"Muse prompt", domain.HarnessMuse, "user-prompt-submit", `{"prompt":"continue","turn_id":"muse-turn-1"}`, "muse-turn-1"},
+		{"Muse stop", domain.HarnessMuse, "stop", `{"turn_id":"muse-turn-1","last_assistant_message":"done"}`, "muse-turn-1"},
+		{"Muse unrelated event", domain.HarnessMuse, "post-tool-use", `{"turn_id":"muse-turn-1"}`, ""},
+		{"Muse missing ID", domain.HarnessMuse, "stop", `{}`, ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := hookConversationFacts(tt.harness, tt.event, []byte(tt.payload)).ProviderTurnID; got != tt.want {

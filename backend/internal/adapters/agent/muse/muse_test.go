@@ -372,6 +372,7 @@ func assertMuseManagedHooks(t *testing.T, path string) {
 		"UserPromptSubmit":  "user-prompt-submit",
 		"PermissionRequest": "permission-request",
 		"Stop":              "stop",
+		"SessionEnd":        "session-end",
 	}
 	for nativeEvent, aoEvent := range want {
 		groups := file.Hooks[nativeEvent]
@@ -602,6 +603,61 @@ func TestContextCancellation(t *testing.T) {
 	}
 	if _, err := ResolveMuseBinary(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("ResolveMuseBinary err = %v, want context.Canceled", err)
+	}
+}
+
+func TestEmitsSubmitActivity(t *testing.T) {
+	if !(&Plugin{}).EmitsSubmitActivity() {
+		t.Fatal("EmitsSubmitActivity() = false, want true")
+	}
+}
+
+func TestGetLaunchCommandPassesReasoningEffort(t *testing.T) {
+	p := &Plugin{resolvedBinary: "muse"}
+	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		Config: ports.AgentConfig{Model: "muse-spark", Effort: "max"},
+		Prompt: "fix it",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"muse", "--trust-workspace", "--model", "muse-spark", "--reasoning-effort", "max", "fix it"}
+	if !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("cmd = %#v, want %#v", cmd, want)
+	}
+}
+
+func TestGetLaunchCommandOmitsBlankEffort(t *testing.T) {
+	p := &Plugin{resolvedBinary: "muse"}
+	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		Config: ports.AgentConfig{Effort: "   "},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"muse", "--trust-workspace"}
+	if !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("cmd = %#v, want %#v", cmd, want)
+	}
+}
+
+func TestGetRestoreCommandPreservesReasoningEffort(t *testing.T) {
+	p := &Plugin{resolvedBinary: "muse"}
+	cmd, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		Config: ports.AgentConfig{Effort: "low"},
+		Session: ports.SessionRef{
+			Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "muse-native-1"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ok = false, want true")
+	}
+	want := []string{"muse", "--trust-workspace", "--reasoning-effort", "low", "resume", "muse-native-1"}
+	if !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
 }
 

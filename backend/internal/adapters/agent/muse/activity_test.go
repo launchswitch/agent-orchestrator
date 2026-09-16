@@ -28,6 +28,7 @@ func TestDeriveActivityState(t *testing.T) {
 		{"permission requested", "permission-request", domain.ActivityBlocked, true},
 		{"turn stopped", "stop", domain.ActivityIdle, true},
 		{"session start is metadata only", "session-start", "", false},
+		{"session ended", "session-end", domain.ActivityExited, true},
 		{"unknown", "unknown", "", false},
 	}
 	for _, tt := range tests {

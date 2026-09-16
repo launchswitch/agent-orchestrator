@@ -277,6 +277,11 @@ func hookConversationFacts(agent domain.AgentHarness, event string, payload []by
 			switch agent {
 			case domain.HarnessCodex:
 				turnID = strings.TrimSpace(p.TurnID)
+			case domain.HarnessMuse:
+				// Muse reports the same turn_id on submit and stop. Its Stop
+				// last_assistant_message stays untrusted (no subagent marker
+				// verified yet), but the id itself is safe turn identity.
+				turnID = strings.TrimSpace(p.TurnID)
 			case domain.HarnessClaudeCode:
 				// Queued submissions reuse the executing prompt's ID. Preserve it as
 				// native evidence; only the adapter can resolve its actual ancestry.

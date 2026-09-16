@@ -10,6 +10,10 @@ import (
 var museTerminalEscape = regexp.MustCompile(`\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07]*(?:\x07|\x1b\\))`)
 
 // DeriveActivityState maps Muse's AO hook callbacks onto activity states.
+// permission-request stays blocked (not waiting_input): it is a pending tool
+// decision where automated input must never land. Blocked clears at the next
+// stop; without a pre/post-tool-use trio it cannot clear mid-turn, so the
+// adapter deliberately does not implement ports.BlockedActivitySignaler.
 func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
 	switch event {
 	case "user-prompt-submit":
@@ -18,6 +22,8 @@ func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
 		return domain.ActivityBlocked, true
 	case "stop":
 		return domain.ActivityIdle, true
+	case "session-end":
+		return domain.ActivityExited, true
 	case "session-start":
 		return "", false
 	default:

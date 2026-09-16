@@ -50,6 +50,12 @@ func New() *Plugin {
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
 var _ ports.ContinuousTerminalActivityDetector = (*Plugin)(nil)
+var _ ports.SubmitActivitySignaler = (*Plugin)(nil)
+
+// EmitsSubmitActivity signals that Muse fires a user-prompt-submit hook
+// under AO's launch, so Activity.State can flip to active after a prompt is
+// accepted. See ports.SubmitActivitySignaler.
+func (p *Plugin) EmitsSubmitActivity() bool { return true }
 
 // Manifest returns the adapter's static self-description.
 func (p *Plugin) Manifest() adapters.Manifest {
@@ -71,7 +77,7 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 
 // GetLaunchCommand builds the argv for a persistent interactive Muse session:
 //
-//	[env TBH_EVAL_APPEND_DEVELOPER_PROMPT=<instructions> TBH_MANAGED_HOOKS_PATH=<path>] muse --trust-workspace [--approval-mode never|--yolo] [--model <model>] [prompt]
+//	[env TBH_EVAL_APPEND_DEVELOPER_PROMPT=<instructions> TBH_MANAGED_HOOKS_PATH=<path>] muse --trust-workspace [--approval-mode never|--yolo] [--model <model>] [--reasoning-effort <effort>] [prompt]
 //
 // The prompt is the CLI's documented optional positional argument. `muse exec`
 // is deliberately not used because it is headless and exits after one turn.
@@ -104,6 +110,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	cmd = append(cmd, binary, "--trust-workspace")
 	appendApprovalFlags(&cmd, cfg.Permissions)
 	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
+	appendReasoningEffortFlag(&cmd, cfg.Config.Effort)
 	if cfg.Prompt != "" {
 		cmd = append(cmd, cfg.Prompt)
 	}
@@ -112,7 +119,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 
 // GetRestoreCommand builds the argv to resume an existing Muse session:
 //
-//	[env TBH_EVAL_APPEND_DEVELOPER_PROMPT=<instructions> TBH_MANAGED_HOOKS_PATH=<path>] muse --trust-workspace [--approval-mode never|--yolo] [--model <model>] resume <agentSessionId> [<prompt>]
+//	[env TBH_EVAL_APPEND_DEVELOPER_PROMPT=<instructions> TBH_MANAGED_HOOKS_PATH=<path>] muse --trust-workspace [--approval-mode never|--yolo] [--model <model>] [--reasoning-effort <effort>] resume <agentSessionId> [<prompt>]
 //
 // ok is false when Muse has not emitted its native session id through AO hooks.
 // The optional resume-time prompt is appended last, matching GetLaunchCommand,
@@ -158,6 +165,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	cmd = append(cmd, binary, "--trust-workspace")
 	appendApprovalFlags(&cmd, cfg.Permissions)
 	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
+	appendReasoningEffortFlag(&cmd, cfg.Config.Effort)
 	cmd = append(cmd, "resume", agentSessionID)
 	if cfg.Prompt != "" {
 		cmd = append(cmd, cfg.Prompt)
@@ -180,6 +188,12 @@ func appendApprovalFlags(cmd *[]string, mode ports.PermissionMode) {
 		*cmd = append(*cmd, "--approval-mode", "never")
 	case ports.PermissionModeBypassPermissions:
 		*cmd = append(*cmd, "--yolo")
+	}
+}
+
+func appendReasoningEffortFlag(cmd *[]string, effort string) {
+	if effort = strings.TrimSpace(effort); effort != "" {
+		*cmd = append(*cmd, "--reasoning-effort", effort)
 	}
 }
 
