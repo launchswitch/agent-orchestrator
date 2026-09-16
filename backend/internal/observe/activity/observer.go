@@ -2,6 +2,7 @@ package activity
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -160,6 +161,8 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 			return
 		}
 		output, err = reader.GetStyledOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
+	} else if viewport, ok := agent.(ports.ViewportTerminalActivityDetector); ok && viewport.DetectTerminalActivityFromViewport() {
+		output, err = o.viewportOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID})
 	} else if rendered, ok := o.runtime.(ports.StyledTerminalOutputReader); options.PreferStyledOutput && ok {
 		output, err = rendered.GetStyledOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
 	} else {
@@ -209,4 +212,26 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	if err != nil {
 		o.logger.Error("activity observer: reconciliation failed", "session", session.ID, "err", err)
 	}
+}
+
+// viewportOutput reads the rendered current screen for adapters whose activity
+// markers are only trustworthy in the rendered viewport. Viewport detectors
+// must not be fed raw scrollback: full-screen TUIs repaint with cursor-control
+// sequences instead of newlines, so the newest newline-terminated history may
+// omit the live composer/footer while still carrying stale status rows from
+// background work that has already finished. A host predating rendered-surface
+// support is the one case where raw history is the best available evidence.
+func (o *Observer) viewportOutput(ctx context.Context, handle ports.RuntimeHandle) (string, error) {
+	styled, ok := o.runtime.(ports.StyledTerminalOutputReader)
+	if !ok {
+		return o.runtime.GetOutput(ctx, handle, o.outputLines)
+	}
+	output, err := styled.GetStyledOutput(ctx, handle, o.outputLines)
+	if err == nil {
+		return output, nil
+	}
+	if errors.Is(err, ports.ErrStyledTerminalOutputUnavailable) {
+		return o.runtime.GetOutput(ctx, handle, o.outputLines)
+	}
+	return "", err
 }
