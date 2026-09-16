@@ -252,6 +252,7 @@ type Discoverer struct {
 	ACPOptions        map[string]ACPOptionListFunc
 	ClaudeModels      ClaudeModelListFunc
 	ClaudeFingerprint ClaudeFingerprintFunc
+	MuseModels        MuseModelListFunc
 }
 
 // CodexModelListFunc obtains Codex's account-scoped app-server catalog without
@@ -274,6 +275,10 @@ type ClaudeModelListFunc func(context.Context, ports.AgentModelDiscoveryRequest)
 // in settings files, such as subscription credentials and apiProvider.
 type ClaudeFingerprintFunc func(context.Context, ports.AgentModelDiscoveryRequest) string
 
+// MuseModelListFunc obtains Muse's model/list catalog over an ephemeral MSP
+// host without opening a session.
+type MuseModelListFunc func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error)
+
 // Discover uses the agent-owned model surface configured for this adapter.
 func (d Discoverer) Discover(ctx context.Context, request ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
 	catalog, err := d.discover(ctx, request)
@@ -292,7 +297,10 @@ func (d Discoverer) discover(ctx context.Context, request ports.AgentModelDiscov
 	if request.AgentID == "claude-code" {
 		return discoverClaudeCatalog(ctx, request, d.ClaudeModels)
 	}
-	if request.AgentID == "muse" || request.AgentID == "memcode" {
+	if request.AgentID == "muse" {
+		return discoverMuseCatalog(ctx, request, d.MuseModels)
+	}
+	if request.AgentID == "memcode" {
 		return Base(request.AgentID), nil
 	}
 	if request.AgentID == "codex" {
@@ -691,6 +699,47 @@ func compareVersions(a, b []int) int {
 		}
 	}
 	return 0
+}
+
+func discoverMuseCatalog(ctx context.Context, request ports.AgentModelDiscoveryRequest, list MuseModelListFunc) (ports.AgentModelCatalog, error) {
+	base := Base(request.AgentID)
+	if list == nil {
+		return base, nil
+	}
+	models, err := list(ctx, request)
+	if err != nil {
+		return base, fmt.Errorf("muse model discovery: %w", err)
+	}
+	models = normalize(models)
+	if len(models) == 0 {
+		return base, errors.New("muse model discovery returned no models")
+	}
+	defaults := 0
+	for _, model := range models {
+		if model.IsDefault {
+			defaults++
+		}
+	}
+	switch {
+	case defaults == 0:
+		models[0].IsDefault = true
+	case defaults > 1:
+		seen := false
+		for i := range models {
+			if !models[i].IsDefault {
+				continue
+			}
+			if seen {
+				models[i].IsDefault = false
+				continue
+			}
+			seen = true
+		}
+	}
+	base.Models = models
+	base.Source = "cli"
+	base.FetchedAt = time.Now().UTC()
+	return base, nil
 }
 
 func discoverACPOptionCatalog(
