@@ -15,9 +15,10 @@ import (
 )
 
 const (
-	museManagedHooksEnvVar = "TBH_MANAGED_HOOKS_PATH"
-	museHookCommandPrefix  = "ao hooks muse "
-	aoRunFileEnvVar        = "AO_RUN_FILE"
+	museManagedHooksEnvVar  = "TBH_MANAGED_HOOKS_PATH"
+	museHookCommandPrefix   = "ao hooks muse "
+	aoRunFileEnvVar         = "AO_RUN_FILE"
+	aoRuntimeLaunchIDEnvVar = "AO_RUNTIME_LAUNCH_ID"
 )
 
 type museHooksFile struct {
@@ -55,6 +56,13 @@ func museHookCommand(cfg ports.WorkspaceHookConfig, event string) string {
 	assignments := []string{
 		"AO_SESSION_ID=" + museShellQuote(strings.TrimSpace(cfg.SessionID)),
 		"AO_DATA_DIR=" + museShellQuote(strings.TrimSpace(cfg.DataDir)),
+	}
+	// The daemon fences every activity signal on the runtime launch id it
+	// committed for the session. Muse only strips AO_* from its hook
+	// subprocesses, so an untagged callback is dropped as stale (never active,
+	// never idle) unless the reserved generation travels in the command itself.
+	if launchID := strings.TrimSpace(cfg.Env[aoRuntimeLaunchIDEnvVar]); launchID != "" {
+		assignments = append(assignments, aoRuntimeLaunchIDEnvVar+"="+museShellQuote(launchID))
 	}
 	if runFile := strings.TrimSpace(os.Getenv(aoRunFileEnvVar)); runFile != "" {
 		assignments = append(assignments, aoRunFileEnvVar+"="+museShellQuote(runFile))

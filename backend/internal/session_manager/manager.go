@@ -1005,6 +1005,16 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 	}
 	m.augmentAgentRuntimeEnv(agent, env)
 	pinRuntimePermissionEnv(env, adapterConfig.Permissions)
+	// Reserve this launch's generation before any workspace hook config is
+	// written. Adapters whose hook subprocess loses AO_* variables inline the
+	// generation into their hook command, so it has to exist — and be the same id
+	// the supervisor stamps into the launch env — while GetAgentHooks runs.
+	launchID, err := m.reserveRuntimeLaunchID()
+	if err != nil {
+		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true)
+		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnSupervisor, err)
+	}
+	env[EnvRuntimeLaunchID] = launchID
 	if err := m.prepareWorkspace(ctx, agent, id, ws.Path, systemPrompt, systemPromptFile, adapterConfig, env); err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, false)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnPrepare, err)
@@ -1043,7 +1053,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn %s: %w", id, err)
 	}
 	m.augmentRuntimePATHForLaunchBinary(ctx, env, argv)
-	argv, launchID, err := m.superviseAgentProcess(agent, id, env, argv)
+	argv, err = m.wrapAgentProcessWithLaunchID(agent, id, env, argv, launchID, supervisedLaunchForce(agent))
 	if err != nil {
 		m.rollbackSeedSpawnWorkspace(ctx, rec, ws, workspaceProject, true)
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnSupervisor, err)
@@ -2381,6 +2391,21 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	}
 	m.augmentAgentRuntimeEnv(agent, env)
 	pinRuntimePermissionEnv(env, agentConfig.Permissions)
+	// Reserve the generation before hooks are installed, for the same reason as
+	// spawn: Muse's hook command carries the id because its hook subprocesses do
+	// not inherit AO_*. A reserved generation from an interface transition is
+	// already authoritative and must be reused rather than replaced.
+	launchID := strings.TrimSpace(reservedGeneration)
+	forceSupervisor := launchID != ""
+	if launchID == "" {
+		launchID, err = m.reserveRuntimeLaunchID()
+		if err != nil {
+			m.cleanupSystemPromptDir(rec.ID)
+			return RestoreResult{}, fmt.Errorf("%s %s: supervisor: %w", operation, rec.ID, err)
+		}
+		forceSupervisor = supervisedLaunchForce(agent)
+	}
+	env[EnvRuntimeLaunchID] = launchID
 	if err := m.prepareWorkspace(ctx, agent, rec.ID, ws.Path, systemPrompt, systemPromptFile, agentConfig, env); err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
 	}
@@ -2407,12 +2432,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
 	}
 	m.augmentRuntimePATHForLaunchBinary(ctx, env, argv)
-	launchID := strings.TrimSpace(reservedGeneration)
-	if launchID == "" {
-		argv, launchID, err = m.superviseAgentProcess(agent, rec.ID, env, argv)
-	} else {
-		argv, err = m.wrapAgentProcessWithLaunchID(agent, rec.ID, env, argv, launchID, true)
-	}
+	argv, err = m.wrapAgentProcessWithLaunchID(agent, rec.ID, env, argv, launchID, forceSupervisor)
 	if err != nil {
 		m.cleanupSystemPromptDir(rec.ID)
 		return RestoreResult{}, fmt.Errorf("%s %s: supervisor: %w", operation, rec.ID, err)
@@ -5000,13 +5020,27 @@ func (m *Manager) validateRuntimePrerequisites() error {
 	return nil
 }
 
-func (m *Manager) superviseAgentProcess(agent ports.Agent, id domain.SessionID, env map[string]string, argv []string) ([]string, string, error) {
-	// Switching-capable providers always use the exact-generation
-	// supervisor, even when their native hooks also report exit. That gives a
-	// later semantic handoff a safe foreground-process proof and ensures an exit
-	// races into the non-interpreting tmux sink rather than a shell.
+// supervisedLaunchForce reports whether an ordinary launch must install AO's
+// generation-bearing process wrapper. Switching-capable providers always use
+// the exact-generation supervisor, even when their native hooks also report
+// exit: that gives a later semantic handoff a safe foreground-process proof and
+// ensures an exit races into the non-interpreting tmux sink rather than a shell.
+func supervisedLaunchForce(agent ports.Agent) bool {
 	_, switchingCapable := agent.(ports.AgentContinuationCapabilityProvider)
-	return m.superviseAgentProcessMode(agent, id, env, argv, switchingCapable)
+	return switchingCapable
+}
+
+// reserveRuntimeLaunchID mints this launch's generation. Spawn and restore call
+// it BEFORE installing workspace hooks: adapters whose hook subprocess loses
+// AO_* variables (Muse) inline the generation into their managed hook command,
+// and the daemon's activity fence drops every signal tagged with a generation
+// other than the one the session committed.
+func (m *Manager) reserveRuntimeLaunchID() (string, error) {
+	launchID := strings.TrimSpace(m.newLaunchID())
+	if launchID == "" {
+		return "", errors.New("generated empty launch id")
+	}
+	return launchID, nil
 }
 
 // superviseAgentProcessForSwitch always installs AO's generation-bearing
@@ -5018,9 +5052,9 @@ func (m *Manager) superviseAgentProcessForSwitch(agent ports.Agent, id domain.Se
 }
 
 func (m *Manager) superviseAgentProcessMode(agent ports.Agent, id domain.SessionID, env map[string]string, argv []string, force bool) ([]string, string, error) {
-	launchID := m.newLaunchID()
-	if strings.TrimSpace(launchID) == "" {
-		return nil, "", errors.New("generated empty launch id")
+	launchID, err := m.reserveRuntimeLaunchID()
+	if err != nil {
+		return nil, "", err
 	}
 	wrapped, err := m.wrapAgentProcessWithLaunchID(agent, id, env, argv, launchID, force)
 	if err != nil {

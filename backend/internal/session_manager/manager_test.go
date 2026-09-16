@@ -673,6 +673,21 @@ func (supervisedLaunchAgent) ExitDetectionMode() ports.AgentExitDetectionMode {
 	return ports.AgentExitDetectionSupervisor
 }
 
+// hookLaunchIDAgent records the runtime generation visible to GetAgentHooks at
+// the moment AO installs workspace hooks. Adapters that inline their callback
+// route (Muse) need it there, not only in the eventual launch env.
+type hookLaunchIDAgent struct {
+	launchArgvAgent
+	hookLaunchID string
+	hookCalls    int
+}
+
+func (a *hookLaunchIDAgent) GetAgentHooks(_ context.Context, cfg ports.WorkspaceHookConfig) error {
+	a.hookCalls++
+	a.hookLaunchID = cfg.Env[EnvRuntimeLaunchID]
+	return nil
+}
+
 // fakeAgents resolves every harness to the same fakeAgent.
 type fakeAgents struct{}
 
@@ -1744,6 +1759,109 @@ func TestSpawn_WrapsSupervisedAgentAndPersistsGeneration(t *testing.T) {
 	}
 	if rec.Metadata.RuntimeLaunchID != "launch-7" {
 		t.Fatalf("stored launch id = %q, want launch-7", rec.Metadata.RuntimeLaunchID)
+	}
+}
+
+func TestSpawn_ReservesLaunchIDBeforeInstallingHooks(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	rt := &fakeRuntime{}
+	agent := &hookLaunchIDAgent{launchArgvAgent: launchArgvAgent{argv: []string{"muse"}}}
+	m := New(Deps{
+		Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+		Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st},
+		LookPath:    func(string) (string, error) { return "/bin/true", nil },
+		Executable:  func() (string, error) { return "/opt/ao", nil },
+		NewLaunchID: func() string { return "launch-7" },
+	})
+
+	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessMuse})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.hookCalls == 0 {
+		t.Fatal("GetAgentHooks was never called")
+	}
+	if agent.hookLaunchID != "launch-7" {
+		t.Fatalf("launch id visible to GetAgentHooks = %q, want launch-7", agent.hookLaunchID)
+	}
+	if got := rt.lastCfg.Env[EnvRuntimeLaunchID]; got != "launch-7" {
+		t.Fatalf("runtime launch env = %q, want launch-7", got)
+	}
+	if rec.Metadata.RuntimeLaunchID != "launch-7" {
+		t.Fatalf("stored launch id = %q, want launch-7", rec.Metadata.RuntimeLaunchID)
+	}
+}
+
+func TestRestore_ReservesLaunchIDBeforeInstallingHooks(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x", RuntimeLaunchID: "launch-old"})
+	rec := st.sessions["mer-1"]
+	rec.Harness = domain.HarnessMuse
+	st.sessions["mer-1"] = rec
+	rt := &fakeRuntime{}
+	agent := &hookLaunchIDAgent{launchArgvAgent: launchArgvAgent{argv: []string{"muse", "resume", "agent-x"}}}
+	m := New(Deps{
+		Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+		Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st},
+		LookPath:    func(string) (string, error) { return "/bin/true", nil },
+		Executable:  func() (string, error) { return "/opt/ao", nil },
+		NewLaunchID: func() string { return "launch-new" },
+	})
+
+	result, err := m.RestoreWithMode(ctx, "mer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.hookCalls == 0 {
+		t.Fatal("GetAgentHooks was never called")
+	}
+	if agent.hookLaunchID != "launch-new" {
+		t.Fatalf("launch id visible to GetAgentHooks = %q, want launch-new", agent.hookLaunchID)
+	}
+	if got := rt.lastCfg.Env[EnvRuntimeLaunchID]; got != "launch-new" {
+		t.Fatalf("restored launch env = %q, want launch-new", got)
+	}
+	if result.Session.Metadata.RuntimeLaunchID != "launch-new" {
+		t.Fatalf("restored launch id = %q, want launch-new", result.Session.Metadata.RuntimeLaunchID)
+	}
+}
+
+func TestRestore_ReusesReservedGenerationForHooksAndLaunch(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x", RuntimeLaunchID: "launch-old"})
+	rec := st.sessions["mer-1"]
+	rec.Harness = domain.HarnessMuse
+	st.sessions["mer-1"] = rec
+	rt := &fakeRuntime{}
+	agent := &hookLaunchIDAgent{launchArgvAgent: launchArgvAgent{argv: []string{"muse", "resume", "agent-x"}}}
+	m := New(Deps{
+		Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+		Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st},
+		LookPath:   func(string) (string, error) { return "/bin/true", nil },
+		Executable: func() (string, error) { return "/opt/ao", nil },
+		NewLaunchID: func() string {
+			t.Fatal("reserved generation must not be replaced")
+			return ""
+		},
+	})
+
+	result, err := m.relaunchSessionWithPolicyAndGeneration(ctx, "reserved restore", rec, st.projects["mer"], ports.WorkspaceInfo{
+		Path: rec.Metadata.WorkspacePath, Branch: rec.Metadata.Branch, SessionID: rec.ID, ProjectID: rec.ProjectID,
+	}, nil, false, false, "launch-reserved", domain.SessionInterfaceTransitionHistoryStrict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.hookLaunchID != "launch-reserved" {
+		t.Fatalf("launch id visible to GetAgentHooks = %q, want launch-reserved", agent.hookLaunchID)
+	}
+	if got := rt.lastCfg.Env[EnvRuntimeLaunchID]; got != "launch-reserved" {
+		t.Fatalf("restored launch env = %q, want launch-reserved", got)
+	}
+	if result.Session.Metadata.RuntimeLaunchID != "launch-reserved" {
+		t.Fatalf("restored launch id = %q, want launch-reserved", result.Session.Metadata.RuntimeLaunchID)
 	}
 }
 
