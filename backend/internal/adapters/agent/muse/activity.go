@@ -79,7 +79,10 @@ func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bo
 	hasComposer := false
 	hasFooter := false
 	for _, line := range current {
-		if line == "⟩" {
+		// An empty composer is a bare glyph: Muse 1.2 renders ⟩, current
+		// releases render ❯. Requiring the exact line keeps composer drafts
+		// from being mistaken for idle.
+		if line == "⟩" || line == "❯" {
 			hasComposer = true
 		}
 		if strings.Contains(line, " · ") && strings.Contains(line, "muse-") {

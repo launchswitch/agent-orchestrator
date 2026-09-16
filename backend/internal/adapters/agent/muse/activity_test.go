@@ -52,6 +52,7 @@ func TestDetectTerminalActivityCapturedMuseFrames(t *testing.T) {
 		{"awaiting compact structured input", "awaiting_user_input_compact.txt", domain.ActivityWaitingInput},
 		{"resumed generation", "active_generation.txt", domain.ActivityActive},
 		{"plain idle composer", "idle_composer.txt", domain.ActivityIdle},
+		{"plain idle composer, current release", "idle_composer_current_release.txt", domain.ActivityIdle},
 		{"idle after a paint retained a finished generation", "idle_with_retained_generation.txt", domain.ActivityIdle},
 	}
 	for _, tt := range tests {
