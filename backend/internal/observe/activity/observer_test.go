@@ -48,6 +48,20 @@ func (f *fakeRuntime) GetOutput(context.Context, ports.RuntimeHandle, int) (stri
 	return f.output, f.err
 }
 
+// fakeStyledRuntime additionally satisfies ports.StyledTerminalOutputReader so
+// tests can distinguish buffered output from the rendered current screen.
+type fakeStyledRuntime struct {
+	fakeRuntime
+	styled      string
+	styledErr   error
+	styledCalls int
+}
+
+func (f *fakeStyledRuntime) GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error) {
+	f.styledCalls++
+	return f.styled, f.styledErr
+}
+
 type fakeAgents map[domain.AgentHarness]ports.Agent
 
 func (f fakeAgents) Agent(harness domain.AgentHarness) (ports.Agent, bool) {
@@ -154,6 +168,102 @@ func TestPollContinuouslyReconcilesMuse(t *testing.T) {
 				t.Fatalf("unexpected reconciliation: %+v", sink.signals)
 			}
 		})
+	}
+}
+
+func TestPollSamplesMuseFromRenderedScreen(t *testing.T) {
+	// Buffered pty-host output keeps a finished turn's spinner line, and the
+	// currency check still reads the newest block as active when the erase
+	// never made it into the buffered text. The rendered screen has the erase
+	// applied, so the observer must sample that for an idle session.
+	now := time.Unix(500, 0).UTC()
+	session := activeSession(now, domain.HarnessMuse)
+	session.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: now.Add(-time.Second)}
+	session.UpdatedAt = now.Add(-time.Second)
+	composer := "── Voice input (⌥ + v to start) ──────────────────────\n⟩\n──────────────────────────────────────────────────────\n  muse-spark-1.2-contributor · high · …/project · YOLO\n"
+	sink := &fakeSink{}
+	runtime := &fakeStyledRuntime{
+		fakeRuntime: fakeRuntime{output: "◇ Finishing up (25s · esc to interrupt)\n" + composer},
+		styled:      composer,
+	}
+	observer := New(
+		fakeSessions{rows: []domain.SessionRecord{session}},
+		sink,
+		runtime,
+		fakeAgents{domain.HarnessMuse: muse.New()},
+		Config{Clock: func() time.Time { return now }, Logger: testLogger()},
+	)
+
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.signals) != 0 {
+		t.Fatalf("buffered output was sampled: %+v", sink.signals)
+	}
+	if runtime.styledCalls != 1 || runtime.calls != 0 {
+		t.Fatalf("styled calls = %d, buffered calls = %d, want 1 and 0", runtime.styledCalls, runtime.calls)
+	}
+}
+
+func TestPollFallsBackToBufferedOutputWithoutRenderedScreen(t *testing.T) {
+	// A detached pty-host from before rendered-screen support is a per-handle
+	// capability miss, so the observer keeps the buffered contract.
+	now := time.Unix(500, 0).UTC()
+	session := activeSession(now, domain.HarnessMuse)
+	session.Activity = domain.Activity{State: domain.ActivityActive, LastActivityAt: now.Add(-time.Second)}
+	session.UpdatedAt = now.Add(-time.Second)
+	sink := &fakeSink{}
+	runtime := &fakeStyledRuntime{
+		fakeRuntime: fakeRuntime{output: "Enter to select · ↑/↓ to move · Tab for an optional note · Esc to interrupt\n"},
+		styledErr:   ports.ErrStyledTerminalOutputUnavailable,
+	}
+	observer := New(
+		fakeSessions{rows: []domain.SessionRecord{session}},
+		sink,
+		runtime,
+		fakeAgents{domain.HarnessMuse: muse.New()},
+		Config{Clock: func() time.Time { return now }, Logger: testLogger()},
+	)
+
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.signals) != 1 || sink.signals[0].State != domain.ActivityWaitingInput || sink.signals[0].Event != "terminal-waiting-input" {
+		t.Fatalf("fallback reconciliation = %+v", sink.signals)
+	}
+	if runtime.styledCalls != 1 || runtime.calls != 1 {
+		t.Fatalf("styled calls = %d, buffered calls = %d, want 1 and 1", runtime.styledCalls, runtime.calls)
+	}
+}
+
+func TestPollSkipsMuseTickWhenRenderedScreenFails(t *testing.T) {
+	// Other read failures are inconclusive. Falling back to buffered output
+	// here would re-apply the repaint that the rendered screen has erased.
+	now := time.Unix(500, 0).UTC()
+	session := activeSession(now, domain.HarnessMuse)
+	session.Activity = domain.Activity{State: domain.ActivityActive, LastActivityAt: now.Add(-time.Second)}
+	session.UpdatedAt = now.Add(-time.Second)
+	sink := &fakeSink{}
+	runtime := &fakeStyledRuntime{
+		fakeRuntime: fakeRuntime{output: "◇ Finishing up (25s · esc to interrupt)\n"},
+		styledErr:   errors.New("pty-host unreachable"),
+	}
+	observer := New(
+		fakeSessions{rows: []domain.SessionRecord{session}},
+		sink,
+		runtime,
+		fakeAgents{domain.HarnessMuse: muse.New()},
+		Config{Clock: func() time.Time { return now }, Logger: testLogger()},
+	)
+
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.signals) != 0 {
+		t.Fatalf("inconclusive screen read emitted reconciliation: %+v", sink.signals)
+	}
+	if runtime.calls != 0 {
+		t.Fatalf("buffered fallback ran after a screen failure: calls=%d", runtime.calls)
 	}
 }
 

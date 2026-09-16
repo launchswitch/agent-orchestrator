@@ -37,9 +37,20 @@ func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
 // callback, so both pause and resume must be observed from the TUI.
 func (p *Plugin) ContinuouslyDetectTerminalActivity() bool { return true }
 
+// TerminalActivityUsesRenderedScreen opts Muse into rendered-screen sampling.
+// Muse repaints its live region with cursor control, and the pty-host's
+// buffered output keeps every repaint: after a turn ends, the completion's
+// line erase never reaches the buffered text, so the finished turn's
+// "· esc to interrupt" status outlives the idle composer. The rendered screen
+// already has the erase applied and shows only the current viewport.
+func (p *Plugin) TerminalActivityUsesRenderedScreen() bool { return true }
+
 // DetectTerminalActivity recognizes authoritative states in Meta Muse's TUI.
-// The newest authoritative marker wins so picker and generation text retained
-// in scrollback cannot override the current TUI state.
+// Only markers inside the newest output block can describe the session: the
+// captured stream keeps earlier repaints, so a finished turn's
+// "· esc to interrupt" status line can sit above the idle composer after a
+// paint. The newest marker inside the current block still wins, so the picker
+// and resumed-generation states keep resolving.
 func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
 	lines := museTerminalLines(output)
 	if len(lines) == 0 {
@@ -49,10 +60,10 @@ func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bo
 	if start < 0 {
 		start = 0
 	}
-	recent := lines[start:]
+	current := museCurrentBlock(lines[start:])
 
-	for i := len(recent) - 1; i >= 0; i-- {
-		line := strings.ToLower(recent[i])
+	for i := len(current) - 1; i >= 0; i-- {
+		line := strings.ToLower(current[i])
 		if strings.HasPrefix(line, "◆ request user input") {
 			return domain.ActivityWaitingInput, true
 		}
@@ -67,7 +78,7 @@ func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bo
 
 	hasComposer := false
 	hasFooter := false
-	for _, line := range recent {
+	for _, line := range current {
 		if line == "⟩" {
 			hasComposer = true
 		}
@@ -79,6 +90,28 @@ func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bo
 		return domain.ActivityIdle, true
 	}
 	return "", false
+}
+
+// museBlockAnchor reports whether a line begins a Muse block that can still be
+// the live one. Muse leads assistant output, its turn status line, and the
+// structured input picker with these glyphs, so the newest anchor opens the
+// only region whose markers describe the session right now. Lines above it are
+// retained output from an earlier paint.
+func museBlockAnchor(line string) bool {
+	return strings.HasPrefix(line, "◆") || strings.HasPrefix(line, "◇")
+}
+
+// museCurrentBlock trims retained repaints above the newest block anchor. A
+// window with no anchor at all (glyph-less provider output, or anchors already
+// scrolled out of the capture) is returned unchanged so marker matching still
+// applies to what is visible.
+func museCurrentBlock(recent []string) []string {
+	for i := len(recent) - 1; i >= 0; i-- {
+		if museBlockAnchor(recent[i]) {
+			return recent[i:]
+		}
+	}
+	return recent
 }
 
 func museTerminalLines(output string) []string {

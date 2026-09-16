@@ -2,6 +2,7 @@ package activity
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -133,7 +134,7 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 		session.Activity.State != domain.ActivityWaitingInput {
 		return
 	}
-	output, err := o.runtime.GetOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
+	output, err := o.terminalOutput(ctx, session, detector, o.outputLines)
 	if err != nil {
 		o.logger.Debug("activity observer: terminal output unavailable", "session", session.ID, "err", err)
 		return
@@ -158,4 +159,30 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	if err != nil {
 		o.logger.Error("activity observer: reconciliation failed", "session", session.ID, "err", err)
 	}
+}
+
+// terminalOutput returns the excerpt the detector should read. Adapters that
+// declare rendered-screen sampling get the current viewport when the runtime
+// supports it, because buffered output retains earlier repaints that the
+// rendered screen has already erased. A detached host that predates styled
+// output keeps the buffered fallback; any other read failure is inconclusive
+// and skips the tick instead of trusting stale-prone buffered output.
+func (o *Observer) terminalOutput(ctx context.Context, session domain.SessionRecord, detector ports.TerminalActivityDetector, lines int) (string, error) {
+	handle := ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}
+	rendered, ok := detector.(ports.RenderedScreenTerminalActivityDetector)
+	if !ok || !rendered.TerminalActivityUsesRenderedScreen() {
+		return o.runtime.GetOutput(ctx, handle, lines)
+	}
+	styled, ok := o.runtime.(ports.StyledTerminalOutputReader)
+	if !ok {
+		return o.runtime.GetOutput(ctx, handle, lines)
+	}
+	output, err := styled.GetStyledOutput(ctx, handle, lines)
+	if err == nil {
+		return output, nil
+	}
+	if errors.Is(err, ports.ErrStyledTerminalOutputUnavailable) {
+		return o.runtime.GetOutput(ctx, handle, lines)
+	}
+	return "", err
 }

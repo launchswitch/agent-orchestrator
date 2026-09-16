@@ -288,6 +288,17 @@ type ContinuousTerminalActivityDetector interface {
 	ContinuouslyDetectTerminalActivity() bool
 }
 
+// RenderedScreenTerminalActivityDetector is an opt-in capability for adapters
+// whose TUI repaints its live region with cursor control sequences. Buffered
+// terminal output keeps every repaint, so a finished turn's spinner line can
+// outlive the turn in the capture; the runtime's rendered current screen has
+// already erased it. When an adapter opts in and the runtime can supply a
+// rendered screen, the observer samples that instead of buffered output.
+type RenderedScreenTerminalActivityDetector interface {
+	TerminalActivityDetector
+	TerminalActivityUsesRenderedScreen() bool
+}
+
 // WaitingTerminalActivityDetector is implemented by non-continuous terminal
 // detectors that can authoritatively recover from a durable waiting-input state.
 type WaitingTerminalActivityDetector interface {

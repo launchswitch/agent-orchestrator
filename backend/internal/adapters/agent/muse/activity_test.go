@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func readMuseFixture(t *testing.T, name string) string {
@@ -51,6 +52,7 @@ func TestDetectTerminalActivityCapturedMuseFrames(t *testing.T) {
 		{"awaiting compact structured input", "awaiting_user_input_compact.txt", domain.ActivityWaitingInput},
 		{"resumed generation", "active_generation.txt", domain.ActivityActive},
 		{"plain idle composer", "idle_composer.txt", domain.ActivityIdle},
+		{"idle after a paint retained a finished generation", "idle_with_retained_generation.txt", domain.ActivityIdle},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -59,6 +61,17 @@ func TestDetectTerminalActivityCapturedMuseFrames(t *testing.T) {
 				t.Fatalf("DetectTerminalActivity(%s) = (%q, %v), want (%q, true)", tt.fixture, got, ok, tt.want)
 			}
 		})
+	}
+}
+
+func TestDetectTerminalActivityIgnoresRetainedGenerationMarker(t *testing.T) {
+	// montamer2-83: after the stop hook reported idle, a paint re-emitted the
+	// TUI below the finished turn's retained "· esc to interrupt" status line.
+	// The capture therefore contains a completed generation frame above an idle
+	// composer, and the oldest marker in the window must not win.
+	got, ok := (&Plugin{}).DetectTerminalActivity(readMuseFixture(t, "idle_with_retained_generation.txt"))
+	if got != domain.ActivityIdle || !ok {
+		t.Fatalf("DetectTerminalActivity(retained generation above idle composer) = (%q, %v), want (%q, true)", got, ok, domain.ActivityIdle)
 	}
 }
 
@@ -87,5 +100,15 @@ func TestDetectTerminalActivityRejectsTranscriptText(t *testing.T) {
 	got, ok := (&Plugin{}).DetectTerminalActivity("The documentation says Enter to select an optional note.\n")
 	if ok {
 		t.Fatalf("DetectTerminalActivity(transcript) = (%q, true), want no signal", got)
+	}
+}
+
+func TestPluginSamplesRenderedScreen(t *testing.T) {
+	// Muse repaints its live region with cursor control, so buffered output can
+	// retain a status line the rendered screen has already erased. The observer
+	// only knows to prefer the rendered screen when the adapter opts in.
+	var detector ports.RenderedScreenTerminalActivityDetector = &Plugin{}
+	if !detector.TerminalActivityUsesRenderedScreen() {
+		t.Fatal("TerminalActivityUsesRenderedScreen() = false, want true")
 	}
 }
