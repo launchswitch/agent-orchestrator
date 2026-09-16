@@ -470,3 +470,50 @@ func TestCleanupAgentHandoffArtifactsRefusesReplacedDataDirectory(t *testing.T) 
 		t.Fatalf("cleanup modified redirected data: body=%q err=%v", got, err)
 	}
 }
+
+func TestBoundTranscriptExcerptPassesSmallTextThrough(t *testing.T) {
+	tail, truncated := boundTranscriptExcerpt("line one\nline two\n")
+	if truncated || tail != "line one\nline two" {
+		t.Fatalf("bound = (%q, %v), want passthrough", tail, truncated)
+	}
+}
+
+func TestBoundTranscriptExcerptKeepsNewestLines(t *testing.T) {
+	var in strings.Builder
+	for i := 0; i < handoffTranscriptMaxLines+10; i++ {
+		fmt.Fprintf(&in, "line-%d\n", i)
+	}
+	tail, truncated := boundTranscriptExcerpt(in.String())
+	if !truncated {
+		t.Fatal("truncated = false, want true past the line cap")
+	}
+	if !strings.HasPrefix(tail, transcriptOmittedMarker+"\n") {
+		t.Fatalf("tail missing omission marker: %.120q", tail)
+	}
+	if strings.Contains(tail, "line-0\n") || !strings.Contains(tail, fmt.Sprintf("line-%d", handoffTranscriptMaxLines+9)) {
+		t.Fatalf("tail kept the wrong window: %.200q", tail)
+	}
+	if got := strings.Count(tail, "\n") + 1; got != handoffTranscriptMaxLines+1 {
+		t.Fatalf("lines = %d, want %d including the marker", got, handoffTranscriptMaxLines+1)
+	}
+	if len(tail) > handoffTranscriptMaxBytes {
+		t.Fatalf("bytes = %d, want <= %d", len(tail), handoffTranscriptMaxBytes)
+	}
+}
+
+func TestBoundTranscriptExcerptSuffixesOversizedSingleLine(t *testing.T) {
+	line := strings.Repeat("x", handoffTranscriptMaxBytes+1024)
+	tail, truncated := boundTranscriptExcerpt(line)
+	if !truncated {
+		t.Fatal("truncated = false, want true for an oversized line")
+	}
+	if !strings.HasPrefix(tail, transcriptOmittedMarker+"\n"+transcriptPartialMarker+"\n") {
+		t.Fatalf("tail missing omission markers: %.160q", tail)
+	}
+	if !strings.HasSuffix(tail, strings.Repeat("x", 64)) {
+		t.Fatalf("tail lost the line suffix: %.120q", tail)
+	}
+	if len(tail) > handoffTranscriptMaxBytes {
+		t.Fatalf("bytes = %d, want <= %d", len(tail), handoffTranscriptMaxBytes)
+	}
+}
