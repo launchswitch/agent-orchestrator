@@ -141,6 +141,60 @@ func TestMuseReturnsStaticCatalogWithoutStartingAgent(t *testing.T) {
 	}
 }
 
+func TestMuseDiscoveryUsesLiveCatalog(t *testing.T) {
+	discoverer := Discoverer{MuseModels: func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
+		return []ports.AgentModelInfo{
+			{ID: "muse-spark-1.3", Label: "muse-spark-1.3", Provider: "meta"},
+			{ID: "muse-spark-1.3-contributor", Label: "contributor", Provider: "meta", IsDefault: true},
+		}, nil
+	}}
+	got, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "muse", Binary: "/bin/muse"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Source != "cli" || len(got.Models) != 2 {
+		t.Fatalf("catalog = %#v, want live cli rows", got)
+	}
+	if !got.Models[0].IsDefault || got.Models[0].ID != "muse-spark-1.3-contributor" {
+		t.Fatalf("default = %+v, want the host default first", got.Models[0])
+	}
+}
+
+func TestMuseDiscoveryFallsBackToStaticOnError(t *testing.T) {
+	discoverer := Discoverer{MuseModels: func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
+		return nil, errors.New("serve unavailable")
+	}}
+	got, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "muse", Binary: "/bin/muse"})
+	if err == nil {
+		t.Fatal("Discover succeeded despite list failure")
+	}
+	if got.Source != "official-catalog" {
+		t.Fatalf("source = %q, want static fallback", got.Source)
+	}
+}
+
+func TestMuseDiscoveryEnforcesSingleDefault(t *testing.T) {
+	discoverer := Discoverer{MuseModels: func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
+		return []ports.AgentModelInfo{
+			{ID: "b-model", IsDefault: true},
+			{ID: "a-model", IsDefault: true},
+		}, nil
+	}}
+	got, err := discoverer.Discover(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "muse", Binary: "/bin/muse"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaults := 0
+	for _, model := range got.Models {
+		if model.IsDefault {
+			defaults++
+		}
+	}
+	if defaults != 1 {
+		t.Fatalf("defaults = %d, want exactly one in %#v", defaults, got.Models)
+	}
+}
+
 func TestClaudeReturnsStaticCatalogWithConfiguredFallback(t *testing.T) {
 	t.Setenv("ANTHROPIC_MODEL", "")
 	t.Setenv("HOME", t.TempDir())

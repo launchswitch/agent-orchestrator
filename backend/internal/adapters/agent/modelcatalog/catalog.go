@@ -135,11 +135,16 @@ func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 type Discoverer struct {
 	CodexModels  CodexModelListFunc
 	ClineOptions ClineConfigOptionListFunc
+	MuseModels   MuseModelListFunc
 }
 
 // CodexModelListFunc obtains Codex's account-scoped app-server catalog without
 // opening a provider thread.
 type CodexModelListFunc func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.ChatModel, error)
+
+// MuseModelListFunc obtains Muse's model/list catalog over an ephemeral MSP
+// host without opening a session.
+type MuseModelListFunc func(context.Context, ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error)
 
 // ClineConfigOptionListFunc obtains Cline's provider-owned model choices from
 // the ACP configuration catalog advertised by session/new.
@@ -151,7 +156,7 @@ func (d Discoverer) Discover(ctx context.Context, request ports.AgentModelDiscov
 		return discoverClaudeCatalog(request), nil
 	}
 	if request.AgentID == "muse" {
-		return Base(request.AgentID), nil
+		return discoverMuseCatalog(ctx, request, d.MuseModels)
 	}
 	if request.AgentID == "codex" {
 		return discoverCodexCatalog(ctx, request, d.CodexModels)
@@ -296,6 +301,47 @@ func discoverCodexCatalog(ctx context.Context, request ports.AgentModelDiscovery
 		return base, errors.New("codex model discovery returned no models")
 	}
 	base.Models = normalize(normalized)
+	base.Source = "cli"
+	base.FetchedAt = time.Now().UTC()
+	return base, nil
+}
+
+func discoverMuseCatalog(ctx context.Context, request ports.AgentModelDiscoveryRequest, list MuseModelListFunc) (ports.AgentModelCatalog, error) {
+	base := Base(request.AgentID)
+	if list == nil {
+		return base, nil
+	}
+	models, err := list(ctx, request)
+	if err != nil {
+		return base, fmt.Errorf("muse model discovery: %w", err)
+	}
+	models = normalize(models)
+	if len(models) == 0 {
+		return base, errors.New("muse model discovery returned no models")
+	}
+	defaults := 0
+	for _, model := range models {
+		if model.IsDefault {
+			defaults++
+		}
+	}
+	switch {
+	case defaults == 0:
+		models[0].IsDefault = true
+	case defaults > 1:
+		seen := false
+		for i := range models {
+			if !models[i].IsDefault {
+				continue
+			}
+			if seen {
+				models[i].IsDefault = false
+				continue
+			}
+			seen = true
+		}
+	}
+	base.Models = models
 	base.Source = "cli"
 	base.FetchedAt = time.Now().UTC()
 	return base, nil
