@@ -36,6 +36,7 @@ func museManagedHooks(cfg ports.WorkspaceHookConfig) map[string][]hooksjson.Matc
 		"UserPromptSubmit":  {museHookGroup(cfg, "user-prompt-submit")},
 		"PermissionRequest": {museHookGroup(cfg, "permission-request")},
 		"Stop":              {museHookGroup(cfg, "stop")},
+		"SessionEnd":        {museHookGroup(cfg, "session-end")},
 	}
 }
 
