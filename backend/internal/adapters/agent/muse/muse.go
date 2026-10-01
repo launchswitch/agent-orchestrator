@@ -78,7 +78,7 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 
 // GetLaunchCommand builds the argv for a persistent interactive Muse session:
 //
-//	[env TBH_EVAL_APPEND_DEVELOPER_PROMPT=<instructions> TBH_MANAGED_HOOKS_PATH=<path>] muse --trust-workspace [--approval-mode never|--yolo] [--model <model>] [--reasoning-effort <effort>] [prompt]
+//	[env TBH_EVAL_APPEND_DEVELOPER_PROMPT=<instructions> TBH_MANAGED_HOOKS_PATH=<path>] muse --trust-workspace --disable-sandbox [--approval-mode never|--yolo] [--model <model>] [--reasoning-effort <effort>] [prompt]
 //
 // The prompt is the CLI's documented optional positional argument. `muse exec`
 // is deliberately not used because it is headless and exits after one turn.
@@ -109,6 +109,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		cmd = append(cmd, env...)
 	}
 	cmd = append(cmd, binary, "--trust-workspace")
+	appendSandboxFlags(&cmd)
 	appendApprovalFlags(&cmd, cfg.Permissions)
 	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
 	appendReasoningEffortFlag(&cmd, cfg.Config.Effort)
@@ -120,7 +121,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 
 // GetRestoreCommand builds the argv to resume an existing Muse session:
 //
-//	[env TBH_EVAL_APPEND_DEVELOPER_PROMPT=<instructions> TBH_MANAGED_HOOKS_PATH=<path>] muse --trust-workspace [--approval-mode never|--yolo] [--model <model>] [--reasoning-effort <effort>] resume <agentSessionId> [<prompt>]
+//	[env TBH_EVAL_APPEND_DEVELOPER_PROMPT=<instructions> TBH_MANAGED_HOOKS_PATH=<path>] muse --trust-workspace --disable-sandbox [--approval-mode never|--yolo] [--model <model>] [--reasoning-effort <effort>] resume <agentSessionId> [<prompt>]
 //
 // ok is false when Muse has not emitted its native session id through AO hooks.
 // The optional resume-time prompt is appended last, matching GetLaunchCommand,
@@ -164,6 +165,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	}
 
 	cmd = append(cmd, binary, "--trust-workspace")
+	appendSandboxFlags(&cmd)
 	appendApprovalFlags(&cmd, cfg.Permissions)
 	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
 	appendReasoningEffortFlag(&cmd, cfg.Config.Effort)
@@ -196,6 +198,14 @@ func appendReasoningEffortFlag(cmd *[]string, effort string) {
 	if effort = strings.TrimSpace(effort); effort != "" {
 		*cmd = append(*cmd, "--reasoning-effort", effort)
 	}
+}
+
+// appendSandboxFlags disables Muse's shell sandbox for AO launches. Workers
+// drive their session through the `ao` CLI, which must see the daemon pid and
+// reach its loopback API; the default sandbox isolates both, so every `ao`
+// call from a worker fails with a stale run-file.
+func appendSandboxFlags(cmd *[]string) {
+	*cmd = append(*cmd, "--disable-sandbox")
 }
 
 var museBinarySpec = binaryutil.BinarySpec{

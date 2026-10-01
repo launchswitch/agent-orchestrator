@@ -56,7 +56,7 @@ func TestGetLaunchCommandStartsInteractiveSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"muse", "--trust-workspace"}
+	want := []string{"muse", "--trust-workspace", "--disable-sandbox"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -77,7 +77,7 @@ func TestGetLaunchCommandDeliversPromptPositionally(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := []string{"muse", "--trust-workspace", tt.prompt}
+			want := []string{"muse", "--trust-workspace", "--disable-sandbox", tt.prompt}
 			if !reflect.DeepEqual(cmd, want) {
 				t.Fatalf("cmd = %#v, want %#v", cmd, want)
 			}
@@ -99,7 +99,7 @@ func TestGetLaunchCommandAppendsModelBeforePrompt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"muse", "--trust-workspace", "--model", "muse-spark", "fix it"}
+	want := []string{"muse", "--trust-workspace", "--disable-sandbox", "--model", "muse-spark", "fix it"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -116,7 +116,7 @@ func TestGetLaunchCommandInjectsSystemPromptWithoutProjectFiles(t *testing.T) {
 	}
 	want := []string{
 		"env", museDeveloperPromptEnvVar + "=follow AO rules",
-		"muse", "--trust-workspace", "fix it",
+		"muse", "--trust-workspace", "--disable-sandbox", "fix it",
 	}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
@@ -140,7 +140,7 @@ func TestGetLaunchCommandInjectsManagedHooksPath(t *testing.T) {
 	}
 	want := []string{
 		"env", museManagedHooksEnvVar + "=" + hooksPath,
-		"muse", "--trust-workspace", "fix it",
+		"muse", "--trust-workspace", "--disable-sandbox", "fix it",
 	}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
@@ -166,7 +166,7 @@ func TestGetLaunchCommandCombinesSystemPromptAndManagedHooksEnvironment(t *testi
 		"env",
 		museDeveloperPromptEnvVar + "=follow AO rules",
 		museManagedHooksEnvVar + "=" + hooksPath,
-		"muse", "--trust-workspace",
+		"muse", "--trust-workspace", "--disable-sandbox",
 	}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
@@ -183,7 +183,7 @@ func TestGetLaunchCommandReadsSystemPromptFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"env", museDeveloperPromptEnvVar + "=file rules", "muse", "--trust-workspace"}
+	want := []string{"env", museDeveloperPromptEnvVar + "=file rules", "muse", "--trust-workspace", "--disable-sandbox"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -205,10 +205,10 @@ func TestGetLaunchCommandMapsOfficialPermissionFlags(t *testing.T) {
 		mode ports.PermissionMode
 		want []string
 	}{
-		{"default", ports.PermissionModeDefault, []string{"muse", "--trust-workspace"}},
-		{"accept edits", ports.PermissionModeAcceptEdits, []string{"muse", "--trust-workspace", "--approval-mode", "never"}},
-		{"auto", ports.PermissionModeAuto, []string{"muse", "--trust-workspace", "--approval-mode", "never"}},
-		{"bypass", ports.PermissionModeBypassPermissions, []string{"muse", "--trust-workspace", "--yolo"}},
+		{"default", ports.PermissionModeDefault, []string{"muse", "--trust-workspace", "--disable-sandbox"}},
+		{"accept edits", ports.PermissionModeAcceptEdits, []string{"muse", "--trust-workspace", "--disable-sandbox", "--approval-mode", "never"}},
+		{"auto", ports.PermissionModeAuto, []string{"muse", "--trust-workspace", "--disable-sandbox", "--approval-mode", "never"}},
+		{"bypass", ports.PermissionModeBypassPermissions, []string{"muse", "--trust-workspace", "--disable-sandbox", "--yolo"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -523,7 +523,7 @@ func TestGetRestoreCommandUsesMuseNativeSessionID(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
-	want := []string{"muse", "--trust-workspace", "resume", "muse-native-1"}
+	want := []string{"muse", "--trust-workspace", "--disable-sandbox", "resume", "muse-native-1"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -543,7 +543,7 @@ func TestGetRestoreCommandPreservesModel(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
-	want := []string{"muse", "--trust-workspace", "--model", "muse-spark", "resume", "muse-native-1"}
+	want := []string{"muse", "--trust-workspace", "--disable-sandbox", "--model", "muse-spark", "resume", "muse-native-1"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -567,7 +567,7 @@ func TestGetRestoreCommandAppendsResumeTimePrompt(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
-	want := []string{"muse", "--trust-workspace", "resume", "muse-native-1", "review the new commit"}
+	want := []string{"muse", "--trust-workspace", "--disable-sandbox", "resume", "muse-native-1", "review the new commit"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -598,7 +598,7 @@ func TestGetRestoreCommandInjectsPromptAndManagedHooksEnvironment(t *testing.T) 
 		"env",
 		museDeveloperPromptEnvVar + "=follow AO rules",
 		museManagedHooksEnvVar + "=" + hooksPath,
-		"muse", "--trust-workspace", "resume", "muse-native-1",
+		"muse", "--trust-workspace", "--disable-sandbox", "resume", "muse-native-1",
 	}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
@@ -684,7 +684,7 @@ func TestGetLaunchCommandPassesReasoningEffort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"muse", "--trust-workspace", "--model", "muse-spark", "--reasoning-effort", "max", "fix it"}
+	want := []string{"muse", "--trust-workspace", "--disable-sandbox", "--model", "muse-spark", "--reasoning-effort", "max", "fix it"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -698,7 +698,7 @@ func TestGetLaunchCommandOmitsBlankEffort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"muse", "--trust-workspace"}
+	want := []string{"muse", "--trust-workspace", "--disable-sandbox"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -718,7 +718,7 @@ func TestGetRestoreCommandPreservesReasoningEffort(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
-	want := []string{"muse", "--trust-workspace", "--reasoning-effort", "low", "resume", "muse-native-1"}
+	want := []string{"muse", "--trust-workspace", "--disable-sandbox", "--reasoning-effort", "low", "resume", "muse-native-1"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
