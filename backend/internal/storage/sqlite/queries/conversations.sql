@@ -109,6 +109,22 @@ WHERE parent_branch_id IS NULL
         )
   );
 
+-- name: AdoptReplacedSessionBranchProvider :execrows
+-- Guarded adoption after a session replacement. When the replacement's own
+-- boundary publication is lost (for example a daemon stop between rebinding
+-- the conversation and committing the boundary), the active branch can still
+-- carry the predecessor's provider identity. This CAS re-proves the stale
+-- identity and its recorded owner, so a lost race is a no-op rather than an
+-- overwrite of live ownership. Callers must have proven the stale owner is
+-- the resuming session itself or a terminated predecessor.
+UPDATE conversation_branches
+SET session_id = sqlc.narg(session_id),
+    provider_conversation_id = sqlc.arg(provider_conversation_id)
+WHERE conversation_branches.id = sqlc.arg(branch_id)
+  AND conversation_branches.conversation_id = sqlc.arg(conversation_id)
+  AND conversation_branches.provider_conversation_id = sqlc.arg(expected_provider_conversation_id)
+  AND conversation_branches.session_id IS sqlc.narg(expected_session_id);
+
 -- name: InsertConversationBranch :exec
 INSERT INTO conversation_branches (
     id, conversation_id, session_id, provider_conversation_id,

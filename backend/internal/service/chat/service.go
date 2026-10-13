@@ -327,6 +327,71 @@ func (s *Service) settleOrphanedWork(ctx context.Context, session domain.Session
 	}
 }
 
+// adoptReplacedSessionBranchIdentity repairs the one stale-identity shape an
+// ordinary resume can prove: the active conversation branch still carries the
+// provider identity of a replaced controller while the resuming session
+// durably owns its own handle. That shape appears when the replacement's
+// boundary publication was lost (for example a daemon stop between rebinding
+// the project conversation and committing the boundary), and resuming must
+// keep working against the session's own native thread. Every other mismatch
+// stays rejected: a handle the session's record does not own was never
+// published for it, and a branch owned by a live session belongs to that
+// session's narrative. Review conversations never replace their session.
+func (s *Service) adoptReplacedSessionBranchIdentity(
+	ctx context.Context,
+	cfg StartConfig,
+	conversation domain.ConversationRecord,
+	activeBranch domain.ConversationBranch,
+) error {
+	mismatch := fmt.Errorf("active conversation branch provider handle %q does not match session handle %q",
+		activeBranch.ProviderConversationID, cfg.ProviderConversationID)
+	if conversationOwner(cfg).Kind == domain.ConversationOwnerReview {
+		return mismatch
+	}
+	staleOwner := activeBranch.SessionID
+	if staleOwner == "" {
+		// Without a recorded owner there is no proof the identity is stale.
+		return mismatch
+	}
+	if s.sessions == nil {
+		return mismatch
+	}
+	record, found, err := s.sessions.GetSession(ctx, cfg.SessionID)
+	if err != nil || !found {
+		return mismatch
+	}
+	// The caller must resume exactly the handle this session's own
+	// ControllerReady commit durably published. A different id proves nothing.
+	if record.Metadata.ProviderConversationID != cfg.ProviderConversationID {
+		return mismatch
+	}
+	if staleOwner != cfg.SessionID {
+		predecessor, predecessorFound, readErr := s.sessions.GetSession(ctx, staleOwner)
+		// A missing predecessor row cannot hold the narrative; a live one does.
+		if (predecessorFound && !predecessor.IsTerminated) || readErr != nil {
+			return mismatch
+		}
+	}
+	adopted, adoptErr := s.store.AdoptReplacedSessionBranchProvider(
+		ctx, conversation.ID, activeBranch.ID,
+		staleOwner, activeBranch.ProviderConversationID,
+		cfg.SessionID, cfg.ProviderConversationID,
+	)
+	if adoptErr != nil {
+		return fmt.Errorf("adopt replaced session branch identity: %w", adoptErr)
+	}
+	if adopted {
+		return nil
+	}
+	// The CAS lost: the branch changed under us. Only a branch that now
+	// already carries this session's handle may proceed.
+	current, readErr := s.store.ConversationBranch(ctx, conversation.ID, activeBranch.ID)
+	if readErr == nil && current.ProviderConversationID == cfg.ProviderConversationID {
+		return nil
+	}
+	return mismatch
+}
+
 // Start launches or resumes the Chat controller for a session.
 //
 // A resume that fails is reported as a failure rather than quietly becoming a new
@@ -629,8 +694,11 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	if cfg.ProviderConversationID != "" && providerHandleOwnedByActiveBranch {
 		if activeBranch.ProviderConversationID != "" &&
 			activeBranch.ProviderConversationID != cfg.ProviderConversationID {
-			return nil, fmt.Errorf("active conversation branch provider handle %q does not match session handle %q",
-				activeBranch.ProviderConversationID, cfg.ProviderConversationID)
+			if err := s.adoptReplacedSessionBranchIdentity(ctx, cfg, conversation, activeBranch); err != nil {
+				return nil, err
+			}
+			activeBranch.SessionID = cfg.SessionID
+			activeBranch.ProviderConversationID = cfg.ProviderConversationID
 		}
 	}
 	// Conversation settings are durable user choices. Restore the selected

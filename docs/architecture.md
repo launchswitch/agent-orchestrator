@@ -370,7 +370,13 @@ The native ID handed over is the current Terminal conversation, which can differ
 from the last Chat provider (for example after replacing an orchestrator). This
 does not prove that the new provider inherited the old context. Session Manager
 reserves a `ChatProviderHandoff` only from a matching durable TUI→Chat transition;
-ordinary resumes retain the exact-handle check. Chat resumes the verified target,
+ordinary resumes retain the exact-handle check. One guarded repair is allowed
+before that check fails: when the session's durable record owns the resuming
+handle and the active branch still carries the identity of the session itself
+or of a terminated predecessor (a lost boundary publication), resume adopts
+the session's identity in a CAS update. A branch owned by a live session, an
+unowned branch identity, or a handle the session record does not own is still
+rejected before provider launch. Chat resumes the verified target,
 reconciles only its provider scope, and prepares a visible context boundary.
 Lifecycle and SQLite atomically publish that boundary, native history, controller
 generation, and any project-narrative ownership transfer, checking the observed

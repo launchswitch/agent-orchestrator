@@ -154,6 +154,47 @@ func (q *Queries) AdoptProviderConversationTurn(ctx context.Context, arg AdoptPr
 	return err
 }
 
+const adoptReplacedSessionBranchProvider = `-- name: AdoptReplacedSessionBranchProvider :execrows
+UPDATE conversation_branches
+SET session_id = ?1,
+    provider_conversation_id = ?2
+WHERE conversation_branches.id = ?3
+  AND conversation_branches.conversation_id = ?4
+  AND conversation_branches.provider_conversation_id = ?5
+  AND conversation_branches.session_id IS ?6
+`
+
+type AdoptReplacedSessionBranchProviderParams struct {
+	SessionID                      sql.NullString
+	ProviderConversationID         string
+	BranchID                       string
+	ConversationID                 string
+	ExpectedProviderConversationID string
+	ExpectedSessionID              sql.NullString
+}
+
+// Guarded adoption after a session replacement. When the replacement's own
+// boundary publication is lost (for example a daemon stop between rebinding
+// the conversation and committing the boundary), the active branch can still
+// carry the predecessor's provider identity. This CAS re-proves the stale
+// identity and its recorded owner, so a lost race is a no-op rather than an
+// overwrite of live ownership. Callers must have proven the stale owner is
+// the resuming session itself or a terminated predecessor.
+func (q *Queries) AdoptReplacedSessionBranchProvider(ctx context.Context, arg AdoptReplacedSessionBranchProviderParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, adoptReplacedSessionBranchProvider,
+		arg.SessionID,
+		arg.ProviderConversationID,
+		arg.BranchID,
+		arg.ConversationID,
+		arg.ExpectedProviderConversationID,
+		arg.ExpectedSessionID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const adoptReviewProviderConversationTurn = `-- name: AdoptReviewProviderConversationTurn :exec
 INSERT OR IGNORE INTO conversation_turns (
     id, conversation_id, handled_by_session_id, handled_by_review_id,

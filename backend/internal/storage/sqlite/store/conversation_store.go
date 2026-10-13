@@ -820,6 +820,40 @@ func (s *Store) RepairIncompleteConversationEdit(
 	return repaired, restoredProviderOwner, nil
 }
 
+// AdoptReplacedSessionBranchProvider re-points an active conversation branch at
+// the replacement session's own provider identity. It is the guarded repair for
+// the one stale-identity shape an ordinary resume can prove: the session
+// durably owns its handle, the conversation is bound to that session, and the
+// branch still carries the identity of the session it was created under. The
+// CAS in the query re-proves the stale identity and owner, so a concurrent
+// boundary commit is a no-op (returned false) rather than an overwrite.
+// Provider scope is deliberately untouched: events already projected under the
+// branch's scope stay in the namespace the replacement's controller used.
+func (s *Store) AdoptReplacedSessionBranchProvider(
+	ctx context.Context,
+	conversationID, branchID string,
+	staleOwner domain.SessionID,
+	staleProviderConversationID string,
+	session domain.SessionID,
+	providerConversationID string,
+) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	rows, err := s.qw.AdoptReplacedSessionBranchProvider(ctx, gen.AdoptReplacedSessionBranchProviderParams{
+		SessionID:                      sql.NullString{String: string(session), Valid: true},
+		ProviderConversationID:         providerConversationID,
+		BranchID:                       branchID,
+		ConversationID:                 conversationID,
+		ExpectedProviderConversationID: staleProviderConversationID,
+		ExpectedSessionID:              sql.NullString{String: string(staleOwner), Valid: true},
+	})
+	if err != nil {
+		return false, fmt.Errorf("adopt replaced session branch %s: %w", branchID, err)
+	}
+	return rows == 1, nil
+}
+
 // ActivateConversationBranch moves the durable conversation head and the Chat
 // controller's provider handle/generation together. If the session is not a live
 // Chat session, the conversation update is rolled back.
