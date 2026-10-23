@@ -310,12 +310,11 @@ func provisioningOrchestrator(t *testing.T, st *sqlite.Store, id domain.SessionI
 
 func startOrchestratorController(t *testing.T, svc *chatsvc.Service, id domain.SessionID) {
 	t.Helper()
+	// Use Service's default boundary commit rather than a no-op Ready callback:
+	// a replacement's first controller must publish its independent provider.
 	if _, err := svc.Start(context.Background(), chatsvc.StartConfig{
 		SessionID: id, ProjectID: testProject, Kind: domain.KindOrchestrator,
 		Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(),
-		ControllerReady: func(chatsvc.StartResult) (chatsvc.ControllerCommit, error) {
-			return chatsvc.ControllerCommit{}, nil
-		},
 	}); err != nil {
 		t.Fatal(err)
 	}
