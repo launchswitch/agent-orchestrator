@@ -7045,9 +7045,8 @@ func (m *Manager) validateRuntimePrerequisites() error {
 // generation-bearing process wrapper. Refresh-capable providers need the
 // exact-generation supervisor's foreground-process proof for command
 // protection and startup checks, and an exit races into the non-interpreting
-// tmux sink rather than a shell. A launch that reuses a generation reserved by
-// an interface transition always forces the wrapper (see
-// superviseAgentProcessForSwitch).
+// tmux sink rather than a shell. A launch that reuses a generation reserved
+// by an interface transition always forces the wrapper.
 func supervisedLaunchForce(agent ports.Agent) bool {
 	refreshCapability, refreshCapable := agent.(ports.AgentTerminalVersionRefresher)
 	return refreshCapable && refreshCapability.SupportsTerminalVersionRefresh()
@@ -7064,14 +7063,6 @@ func (m *Manager) reserveRuntimeLaunchID() (string, error) {
 		return "", errors.New("generated empty launch id")
 	}
 	return launchID, nil
-}
-
-// superviseAgentProcessForSwitch always installs AO's generation-bearing
-// wrapper. Native hooks still report activity, while the wrapper gives crash
-// recovery a process-level proof that a surviving workload belongs to the
-// target generation rather than the provider that was stopped.
-func (m *Manager) superviseAgentProcessForSwitch(agent ports.Agent, id domain.SessionID, env map[string]string, argv []string) ([]string, string, error) {
-	return m.superviseAgentProcessMode(agent, id, env, argv, true)
 }
 
 func (m *Manager) superviseAgentProcessMode(agent ports.Agent, id domain.SessionID, env map[string]string, argv []string, force bool) ([]string, string, error) {
