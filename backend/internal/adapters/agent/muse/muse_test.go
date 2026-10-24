@@ -56,7 +56,7 @@ func TestGetLaunchCommandStartsInteractiveSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"muse", "--trust-workspace"}
+	want := []string{"muse", "--trust-workspace", "--disable-sandbox"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -77,7 +77,7 @@ func TestGetLaunchCommandDeliversPromptPositionally(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := []string{"muse", "--trust-workspace", tt.prompt}
+			want := []string{"muse", "--trust-workspace", "--disable-sandbox", tt.prompt}
 			if !reflect.DeepEqual(cmd, want) {
 				t.Fatalf("cmd = %#v, want %#v", cmd, want)
 			}
@@ -99,7 +99,7 @@ func TestGetLaunchCommandAppendsModelBeforePrompt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"muse", "--trust-workspace", "--model", "muse-spark", "fix it"}
+	want := []string{"muse", "--trust-workspace", "--disable-sandbox", "--model", "muse-spark", "fix it"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -116,7 +116,7 @@ func TestGetLaunchCommandInjectsSystemPromptWithoutProjectFiles(t *testing.T) {
 	}
 	want := []string{
 		"env", museDeveloperPromptEnvVar + "=follow AO rules",
-		"muse", "--trust-workspace", "fix it",
+		"muse", "--trust-workspace", "--disable-sandbox", "fix it",
 	}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
@@ -140,7 +140,7 @@ func TestGetLaunchCommandInjectsManagedHooksPath(t *testing.T) {
 	}
 	want := []string{
 		"env", museManagedHooksEnvVar + "=" + hooksPath,
-		"muse", "--trust-workspace", "fix it",
+		"muse", "--trust-workspace", "--disable-sandbox", "fix it",
 	}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
@@ -166,7 +166,7 @@ func TestGetLaunchCommandCombinesSystemPromptAndManagedHooksEnvironment(t *testi
 		"env",
 		museDeveloperPromptEnvVar + "=follow AO rules",
 		museManagedHooksEnvVar + "=" + hooksPath,
-		"muse", "--trust-workspace",
+		"muse", "--trust-workspace", "--disable-sandbox",
 	}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
@@ -183,7 +183,7 @@ func TestGetLaunchCommandReadsSystemPromptFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"env", museDeveloperPromptEnvVar + "=file rules", "muse", "--trust-workspace"}
+	want := []string{"env", museDeveloperPromptEnvVar + "=file rules", "muse", "--trust-workspace", "--disable-sandbox"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -205,10 +205,10 @@ func TestGetLaunchCommandMapsOfficialPermissionFlags(t *testing.T) {
 		mode ports.PermissionMode
 		want []string
 	}{
-		{"default", ports.PermissionModeDefault, []string{"muse", "--trust-workspace"}},
-		{"accept edits", ports.PermissionModeAcceptEdits, []string{"muse", "--trust-workspace", "--approval-mode", "never"}},
-		{"auto", ports.PermissionModeAuto, []string{"muse", "--trust-workspace", "--approval-mode", "never"}},
-		{"bypass", ports.PermissionModeBypassPermissions, []string{"muse", "--trust-workspace", "--yolo"}},
+		{"default", ports.PermissionModeDefault, []string{"muse", "--trust-workspace", "--disable-sandbox"}},
+		{"accept edits", ports.PermissionModeAcceptEdits, []string{"muse", "--trust-workspace", "--disable-sandbox", "--approval-mode", "never"}},
+		{"auto", ports.PermissionModeAuto, []string{"muse", "--trust-workspace", "--disable-sandbox", "--approval-mode", "never"}},
+		{"bypass", ports.PermissionModeBypassPermissions, []string{"muse", "--trust-workspace", "--disable-sandbox", "--yolo"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -344,6 +344,69 @@ func TestManagedHookCommandsRestoreSanitizedAORoute(t *testing.T) {
 	}
 }
 
+func TestManagedHookCommandsCarryReservedRuntimeLaunchID(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv(aoRunFileEnvVar, "")
+	cfg := ports.WorkspaceHookConfig{
+		DataDir: dataDir, SessionID: "sess-1",
+		Env: map[string]string{aoRuntimeLaunchIDEnvVar: "launch-9"},
+	}
+	if err := (&Plugin{}).GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	path, err := museManagedHooksPath(dataDir, cfg.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // test-owned path
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file museHooksFile
+	if err := json.Unmarshal(data, &file); err != nil {
+		t.Fatal(err)
+	}
+	for nativeEvent, aoEvent := range map[string]string{
+		"SessionStart":      "session-start",
+		"UserPromptSubmit":  "user-prompt-submit",
+		"PermissionRequest": "permission-request",
+		"Stop":              "stop",
+	} {
+		groups := file.Hooks[nativeEvent]
+		if len(groups) != 1 || len(groups[0].Hooks) != 1 {
+			t.Fatalf("hooks[%q] = %#v, want one command", nativeEvent, groups)
+		}
+		command := groups[0].Hooks[0].Command
+		want := "env AO_SESSION_ID='sess-1' AO_DATA_DIR=" + museShellQuote(dataDir) +
+			" AO_RUNTIME_LAUNCH_ID='launch-9' ao hooks muse " + aoEvent
+		if command != want {
+			t.Fatalf("hooks[%q] command = %q, want %q", nativeEvent, command, want)
+		}
+	}
+}
+
+func TestManagedHookCommandsOmitBlankRuntimeLaunchID(t *testing.T) {
+	t.Setenv(aoRunFileEnvVar, "")
+	cfg := ports.WorkspaceHookConfig{
+		DataDir: t.TempDir(), SessionID: "sess-1",
+		Env: map[string]string{aoRuntimeLaunchIDEnvVar: "   "},
+	}
+	if err := (&Plugin{}).GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	path, err := museManagedHooksPath(cfg.DataDir, cfg.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // test-owned path
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), aoRuntimeLaunchIDEnvVar) {
+		t.Fatalf("blank launch id leaked into managed hooks:\n%s", data)
+	}
+}
+
 func TestManagedHooksRequireAOOwnedPathInputs(t *testing.T) {
 	p := &Plugin{resolvedBinary: "muse"}
 	for _, cfg := range []ports.WorkspaceHookConfig{
@@ -372,6 +435,7 @@ func assertMuseManagedHooks(t *testing.T, path string) {
 		"UserPromptSubmit":  "user-prompt-submit",
 		"PermissionRequest": "permission-request",
 		"Stop":              "stop",
+		"SessionEnd":        "session-end",
 	}
 	for nativeEvent, aoEvent := range want {
 		groups := file.Hooks[nativeEvent]
@@ -459,7 +523,7 @@ func TestGetRestoreCommandUsesMuseNativeSessionID(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
-	want := []string{"muse", "--trust-workspace", "resume", "muse-native-1"}
+	want := []string{"muse", "--trust-workspace", "--disable-sandbox", "resume", "muse-native-1"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -479,7 +543,7 @@ func TestGetRestoreCommandPreservesModel(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
-	want := []string{"muse", "--trust-workspace", "--model", "muse-spark", "resume", "muse-native-1"}
+	want := []string{"muse", "--trust-workspace", "--disable-sandbox", "--model", "muse-spark", "resume", "muse-native-1"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -503,7 +567,7 @@ func TestGetRestoreCommandAppendsResumeTimePrompt(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
-	want := []string{"muse", "--trust-workspace", "resume", "muse-native-1", "review the new commit"}
+	want := []string{"muse", "--trust-workspace", "--disable-sandbox", "resume", "muse-native-1", "review the new commit"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -534,7 +598,7 @@ func TestGetRestoreCommandInjectsPromptAndManagedHooksEnvironment(t *testing.T) 
 		"env",
 		museDeveloperPromptEnvVar + "=follow AO rules",
 		museManagedHooksEnvVar + "=" + hooksPath,
-		"muse", "--trust-workspace", "resume", "muse-native-1",
+		"muse", "--trust-workspace", "--disable-sandbox", "resume", "muse-native-1",
 	}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
@@ -602,6 +666,61 @@ func TestContextCancellation(t *testing.T) {
 	}
 	if _, err := ResolveMuseBinary(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("ResolveMuseBinary err = %v, want context.Canceled", err)
+	}
+}
+
+func TestEmitsSubmitActivity(t *testing.T) {
+	if !(&Plugin{}).EmitsSubmitActivity() {
+		t.Fatal("EmitsSubmitActivity() = false, want true")
+	}
+}
+
+func TestGetLaunchCommandPassesReasoningEffort(t *testing.T) {
+	p := &Plugin{resolvedBinary: "muse"}
+	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		Config: ports.AgentConfig{Model: "muse-spark", Effort: "max"},
+		Prompt: "fix it",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"muse", "--trust-workspace", "--disable-sandbox", "--model", "muse-spark", "--reasoning-effort", "max", "fix it"}
+	if !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("cmd = %#v, want %#v", cmd, want)
+	}
+}
+
+func TestGetLaunchCommandOmitsBlankEffort(t *testing.T) {
+	p := &Plugin{resolvedBinary: "muse"}
+	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		Config: ports.AgentConfig{Effort: "   "},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"muse", "--trust-workspace", "--disable-sandbox"}
+	if !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("cmd = %#v, want %#v", cmd, want)
+	}
+}
+
+func TestGetRestoreCommandPreservesReasoningEffort(t *testing.T) {
+	p := &Plugin{resolvedBinary: "muse"}
+	cmd, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		Config: ports.AgentConfig{Effort: "low"},
+		Session: ports.SessionRef{
+			Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "muse-native-1"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ok = false, want true")
+	}
+	want := []string{"muse", "--trust-workspace", "--disable-sandbox", "--reasoning-effort", "low", "resume", "muse-native-1"}
+	if !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
 }
 

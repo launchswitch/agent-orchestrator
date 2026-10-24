@@ -113,6 +113,10 @@ func TestDarwinDefaultSpawnHostEndToEnd(t *testing.T) {
 			t.Fatalf("get output: %v", outputErr)
 		}
 		text := strings.ReplaceAll(output, "\r", "")
+		// The detached host answers the child's DA1 probe the way a real
+		// terminal does (see terminalQueryResponder); the reply rides stdin
+		// ahead of the typed line, so drop it before asserting the round trip.
+		text = strings.ReplaceAll(text, "\x1b[?62;22c", "")
 		if strings.Contains(text, "ready:works:prefix") && strings.Contains(text, "received:hello") {
 			break
 		}
