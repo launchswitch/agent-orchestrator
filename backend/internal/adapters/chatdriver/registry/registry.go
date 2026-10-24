@@ -20,6 +20,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/droid"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimchi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/muse"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/omp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
@@ -36,6 +37,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/droidacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/kimchiacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/kimiacp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/museacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/ompacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/opencodeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/opencodev2acp"
@@ -77,6 +79,8 @@ func New(drivers ...ports.ChatDriver) *Registry {
 // DeepSeek Harness, and GitHub Copilot expose ACP themselves, so AO launches the exact executable
 // resolved by each existing agent plugin. No path scrapes terminal output or
 // packages a second provider CLI.
+// Muse Code runs through the user-installed @bex-co/muse-code-acp adapter over
+// the same transport, reusing the Muse plugin's binary and auth answers.
 // Unreal Agent is compiled into AO and runs behind the same detached host seam.
 //
 // Every other harness stays TUI-only until the same is true of it. The driver
@@ -107,6 +111,8 @@ func Build(log *slog.Logger, onClaudeAuthRejected func()) *Registry {
 	add(kimchiacp.New(kimchiPlugin, log), kimchiPlugin)
 	piPlugin := pi.New()
 	add(piacp.New(piPlugin, log), piPlugin)
+	musePlugin := muse.New()
+	add(museacp.New(musePlugin, log), musePlugin)
 	cursorPlugin := cursor.New()
 	add(cursoracp.New(cursorPlugin, log), cursorPlugin)
 	ompPlugin := omp.New()

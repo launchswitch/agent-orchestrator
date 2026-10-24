@@ -14,7 +14,8 @@ import (
 // run chat mode — so the shipped set is a release decision, not an implementation
 // detail. Codex uses its native app-server; Claude, Cursor, OpenCode, Droid,
 // Kimi, Kimchi, Pi, OMP, Qwen, and Agy (through Google's Antigravity ACP server)
-// use the reusable ACP transport; Unreal Agent is
+// use the reusable ACP transport; Muse uses it through the user-installed
+// @bex-co/muse-code-acp adapter; Unreal Agent is
 // embedded behind the persistent host. Every remaining
 // harness is deliberately TUI-only.
 func TestShippedChatDrivers(t *testing.T) {
@@ -29,6 +30,7 @@ func TestShippedChatDrivers(t *testing.T) {
 		domain.HarnessKimi,
 		domain.HarnessKimchi,
 		domain.HarnessPi,
+		domain.HarnessMuse,
 		domain.HarnessCursor,
 		domain.HarnessOMP,
 		domain.HarnessQwen,
