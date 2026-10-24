@@ -724,13 +724,14 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	} else if !providerHandleOwnedByActiveBranch {
 		providerBoundaryID = providerScopeID
 	} else if cfg.ProviderConversationID == "" && cfg.ProviderScopeID == "" &&
-		!queuedBeforeFirstController &&
 		(activeBranch.ProviderConversationID != "" || hadProviderHistory ||
-			(!preserveUndispatchedQueue && conversation.LatestSequence > 0)) {
-		// This conversation already owns provider history, but the caller proved it
-		// cannot resume that provider thread. Reserve the next provider boundary
-		// before connect so every opaque id emitted by the fresh process is born in
-		// the same namespace that ControllerReady will durably publish.
+			(conversation.LatestSequence > 0 && (activeBranch.SessionID != cfg.SessionID ||
+				(!queuedBeforeFirstController && !preserveUndispatchedQueue)))) {
+		// Queued intake alone does not prove provider history, but a first
+		// controller can inherit another orchestrator's recorded history. Keep
+		// its queue intact without reusing that predecessor's provider namespace.
+		// Reserve the next boundary before connect so ControllerReady publishes
+		// the fresh provider identity and session owner atomically.
 		providerBoundaryID = s.newID()
 		providerScopeID = providerBoundaryID
 		providerHandleOwnedByActiveBranch = false
