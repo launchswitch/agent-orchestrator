@@ -38,6 +38,9 @@ type ProviderSwitchRequest struct {
 	// HandoffNote is the note the target provider starts with. The switch
 	// front door builds it; it is never accepted from a client.
 	HandoffNote string
+	// Reset switches to the agent already active, as an explicit context reset:
+	// the same flow hands the conversation off and starts that agent fresh.
+	Reset bool
 }
 
 // ChatProviderSwitch is an internal launch reservation. The source controller

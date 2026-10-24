@@ -136,6 +136,91 @@ func TestProviderSwitchPublishesApproximateBranch(t *testing.T) {
 	}
 }
 
+// A reset is the one same-target switch the flow accepts: the agent hands its
+// own conversation over and starts fresh, from a handoff, exactly as a switch
+// to another agent does. The old provider context is never replayed.
+func TestProviderSwitchResetHandsTheSameAgentAFreshConversation(t *testing.T) {
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+
+	completeTurn(t, h, "reset keeps this context", "provider-turn-1")
+	h.awaitSnapshot(t, func(snapshot store.ConversationSnapshot) bool {
+		return len(snapshot.Messages) == 2
+	})
+	before, err := h.st.ConversationForSession(ctx, testSession)
+	if err != nil {
+		t.Fatalf("read conversation before the reset: %v", err)
+	}
+	sourceBranch, err := h.st.ConversationBranch(ctx, before.ID, before.ActiveBranchID)
+	if err != nil {
+		t.Fatalf("read the source branch: %v", err)
+	}
+
+	// Without the flag the agent already active is refused, as before.
+	var refusal *domain.ProviderSwitchError
+	err = h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessCodex})
+	if !errors.As(err, &refusal) || refusal.Kind != domain.ProviderSwitchRefusalUnsupported || !errors.Is(err, domain.ErrProviderAlreadyActive) {
+		t.Fatalf("same-target switch error = %v, want the already-active refusal", err)
+	}
+
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
+		TargetHarness: domain.HarnessCodex, IdempotencyKey: "reset-once", Reset: true,
+	}); err != nil {
+		t.Fatalf("SwitchProvider with reset: %v", err)
+	}
+
+	// The handoff was collected from the durable rows, and the target is a
+	// fresh provider conversation: the old context is never replayed.
+	targetConfig := lastStart(driver)
+	if !strings.Contains(targetConfig.SystemPrompt, domain.HandoffNotePrefix) ||
+		!strings.Contains(targetConfig.SystemPrompt, "reset keeps this context") {
+		t.Fatalf("target handoff note is missing the conversation: %q", targetConfig.SystemPrompt)
+	}
+	if targetConfig.ProviderScopeID == "" || targetConfig.ProviderScopeID == sourceBranch.ProviderScopeID {
+		t.Fatalf("target provider scope = %q, want a fresh one past %q", targetConfig.ProviderScopeID, sourceBranch.ProviderScopeID)
+	}
+
+	record, found, err := h.st.GetSession(ctx, testSession)
+	if err != nil || !found || record.Harness != domain.HarnessCodex || record.Mode != domain.SessionModeChat {
+		t.Fatalf("session after the reset = %+v found=%v err=%v, want the same Codex chat", record, found, err)
+	}
+	if record.Metadata.ProviderConversationID == "" {
+		t.Fatalf("reset session has no provider conversation: %+v", record.Metadata)
+	}
+	snapshot, err := h.st.LoadConversationSnapshot(ctx, before.ID)
+	if err != nil {
+		t.Fatalf("read conversation after the reset: %v", err)
+	}
+	if snapshot.ActiveBranch.ID == "" || snapshot.ActiveBranch.ID == before.ActiveBranchID {
+		t.Fatalf("active branch = %q, want a new branch after %q", snapshot.ActiveBranch.ID, before.ActiveBranchID)
+	}
+	if !strings.Contains(snapshot.ActiveBranch.HandoffNote, "reset keeps this context") {
+		t.Fatalf("the handoff note was not stored with the new branch: %q", snapshot.ActiveBranch.HandoffNote)
+	}
+	foundMarker := false
+	for _, activity := range snapshot.Activities {
+		if activity.RequestID == "reset-once" && strings.Contains(activity.Summary, "Switched provider") {
+			foundMarker = true
+			break
+		}
+	}
+	if !foundMarker {
+		t.Fatalf("the switch marker was not committed with the reset")
+	}
+
+	// The flag is a door past only that one refusal: an agent still working
+	// stays one, reset or not.
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "still going", Origin: domain.MessageOriginHuman,
+	}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	err = h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessCodex, Reset: true})
+	if !errors.As(err, &refusal) || refusal.Kind != domain.ProviderSwitchRefusalBusy {
+		t.Fatalf("reset while working = %v, want a busy refusal", err)
+	}
+}
+
 func TestProviderSwitchFailureRestoresSourceController(t *testing.T) {
 	h, _, driver := newEditHarness(t, false)
 	ctx := context.Background()

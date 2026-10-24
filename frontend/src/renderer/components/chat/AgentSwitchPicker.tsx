@@ -6,7 +6,7 @@
 
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
-import { Brain, ChevronRight, Loader2, Star, TriangleAlert, X, Zap } from "lucide-react";
+import { Brain, ChevronRight, Eraser, Loader2, Star, TriangleAlert, X, Zap } from "lucide-react";
 import { Fragment, memo, useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions, type AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
@@ -93,6 +93,8 @@ export interface AgentSwitchProps {
 	ultracode?: { on: boolean; onChange: (on: boolean) => void };
 	/** When Claude Code compacts on its own. Applies the next time it starts. */
 	autoCompact?: AutoCompactControl;
+	/** Chat only: asked to reset the conversation's context, handing it off to a fresh one on the same agent. */
+	onResetContext?: () => void;
 }
 
 export interface PickerModel {
@@ -518,6 +520,19 @@ export function AgentModelPicker({
 										onChange={(value) => pending && onPendingChange({ ...pending, autoCompactWindow: value })}
 										title={t("agentSwitch.autoCompactHint")}
 									/>
+								</div>
+							) : null}
+							{!terminal && agentSwitch.onResetContext && !pending ? (
+								<div className={DIVIDER}>
+									<OptionMenuItem
+										disabled={agentSwitch.disabled}
+										onSelect={() => agentSwitch.onResetContext?.()}
+										title={t("agentSwitch.resetContextHint")}
+										className="gap-2 text-xs text-foreground"
+									>
+										<Eraser aria-hidden="true" className="size-3.5 shrink-0" />
+										{t("agentSwitch.resetContext")}
+									</OptionMenuItem>
 								</div>
 							) : null}
 						</>

@@ -45,7 +45,7 @@ func (c *ConversationsController) switchProvider(w http.ResponseWriter, r *http.
 		Model:    capActivityMeta(strings.TrimSpace(domain.SanitizeControlChars(req.Model))),
 		Effort:   capActivityMeta(strings.TrimSpace(domain.SanitizeControlChars(req.Effort))),
 		FastMode: req.FastMode, Ultracode: req.Ultracode, AutoCompactWindow: req.AutoCompactWindow,
-		PermissionMode: domain.PermissionMode(req.PermissionMode),
+		PermissionMode: domain.PermissionMode(req.PermissionMode), Reset: req.Reset,
 	}
 	if req.Message == nil {
 		if err := c.Svc.SwitchProvider(ctx, sessionID, request); err != nil {

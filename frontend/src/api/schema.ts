@@ -6255,6 +6255,7 @@ export interface components {
             model?: string;
             /** @enum {string} */
             permissionMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+            reset?: boolean;
             targetHarness: string;
             ultracode?: boolean;
         };
