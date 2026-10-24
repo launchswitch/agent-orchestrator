@@ -191,7 +191,7 @@ func (s *Service) switchProvider(ctx context.Context, id domain.SessionID, reque
 	if err != nil {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalRecoveryRequired, Detail: "the source Chat controller is not ready", Cause: err}
 	}
-	if source.harness == request.TargetHarness {
+	if source.harness == request.TargetHarness && !request.Reset {
 		return &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported, Detail: "target provider is already active", Cause: domain.ErrProviderAlreadyActive}
 	}
 	if source.busy() {

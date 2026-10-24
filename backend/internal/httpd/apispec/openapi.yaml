@@ -17958,6 +17958,8 @@ components:
           - auto
           - bypass-permissions
           type: string
+        reset:
+          type: boolean
         targetHarness:
           type: string
         ultracode:

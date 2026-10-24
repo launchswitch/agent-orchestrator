@@ -48,6 +48,7 @@ import type { ConversationSnapshot, TurnSettings } from "../../types/conversatio
 import type { TerminalTarget } from "../../types/terminal";
 import type { WorkspaceSession } from "../../types/workspace";
 import { ComposerErrorNotice, switchEffort, type PendingAgentSwitch } from "./AgentSwitchPicker";
+import { ConfirmDialog } from "../ConfirmDialog";
 import { apiErrorMessage } from "../../lib/api-client";
 import { AGENT_SWITCH_FAILED } from "./ChatComposer";
 import { useUiStore } from "../../stores/ui-store";
@@ -255,6 +256,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	}, [hostId, queryClient, session.id, statusReadiness]);
 	// A switch refused inside a send; the separate switch request keeps its own.
 	const [sendSwitchError, setSendSwitchError] = useState<unknown>();
+	// A context reset is destructive-looking enough to confirm first: the live
+	// context is handed off and dropped, not replayed.
+	const [confirmingContextReset, setConfirmingContextReset] = useState(false);
 	const switchError = providerSwitch.error ?? sendSwitchError;
 	const clearSwitchError = () => { setSendSwitchError(undefined); providerSwitch.reset(); };
 	const currentHarness = snapshot?.harness;
@@ -322,7 +326,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const pendingPermissionModes = pendingSwitch ? permissionModes?.get(pendingSwitch.harness) : undefined;
 	const agentSwitch = useMemo(
 		() => currentHarness && !session.cloud && !newWorkDisabled
-			? { projectId: session.workspaceId, hostId, pending: pendingSwitch, pendingPermissionModes, chatPermissionMode, onPendingChange: choosePendingSwitch, disabled: switchBlocked, ultracode, autoCompact }
+			? { projectId: session.workspaceId, hostId, pending: pendingSwitch, pendingPermissionModes, chatPermissionMode, onPendingChange: choosePendingSwitch, disabled: switchBlocked, ultracode, autoCompact, onResetContext: () => setConfirmingContextReset(true) }
 			: undefined,
 		[autoCompact, chatPermissionMode, choosePendingSwitch, currentHarness, hostId, newWorkDisabled, pendingPermissionModes, pendingSwitch, session.cloud, session.workspaceId, switchBlocked, ultracode],
 	);
@@ -790,6 +794,26 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				cancelQueuedTurnPendingTurnId={commands.cancelQueuedTurnPendingTurnId}
 				editQueuedTurnPendingTurnId={commands.editQueuedTurnPendingTurnId}
 			/>
+			{currentHarness ? (
+				<ConfirmDialog
+					open={confirmingContextReset}
+					title={t("agentSwitch.resetContextTitle")}
+					description={t("agentSwitch.resetContextDescription", { agent: agentLabel(currentHarness) })}
+					confirmLabel={t("agentSwitch.resetContextConfirm")}
+					confirmAriaLabel={t("agentSwitch.resetContextConfirm")}
+					destructive
+					busy={providerSwitch.isPending}
+					error={providerSwitch.error ? apiErrorMessage(providerSwitch.error) : null}
+					onConfirm={() => {
+						if (!currentHarness) return;
+						providerSwitch.mutate(
+							{ targetHarness: currentHarness, reset: true },
+							{ onSuccess: () => setConfirmingContextReset(false) },
+						);
+					}}
+					onOpenChange={(open) => { if (!open) setConfirmingContextReset(false); }}
+				/>
+			) : null}
 		</div>
 	);
 });
