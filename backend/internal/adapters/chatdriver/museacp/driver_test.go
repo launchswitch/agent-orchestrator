@@ -67,6 +67,28 @@ func TestLaunchUsesPreinstalledAdapterAndPointsItAtTheVerifiedMuse(t *testing.T)
 	if got := launch.Env["MUSE_CODE_EXECUTABLE"]; got != "/user/bin/muse" {
 		t.Fatalf("MUSE_CODE_EXECUTABLE = %q, want the plugin-verified muse binary", got)
 	}
+	if got := launch.Env["MUSE_CODE_ACP_ALLOW_YOLO"]; got != "1" {
+		t.Fatalf("MUSE_CODE_ACP_ALLOW_YOLO = %q, want 1 so the adapter offers the sandbox option's disabled value", got)
+	}
+}
+
+func TestLaunchKeepsAnExplicitSandboxGuard(t *testing.T) {
+	for _, explicit := range []string{"1", "0", "false"} {
+		t.Run("explicit "+explicit, func(t *testing.T) {
+			cfg := buildConfig(fakeMusePlugin{binary: "/user/bin/muse"}, installedAdapter(), nil)
+			launch, err := cfg.Launch(context.Background(), acpdriver.LaunchConfig{
+				SessionID: "session-1",
+				DataDir:   t.TempDir(),
+				Env:       map[string]string{"MUSE_CODE_ACP_ALLOW_YOLO": explicit},
+			})
+			if err != nil {
+				t.Fatalf("Launch: %v", err)
+			}
+			if got := launch.Env["MUSE_CODE_ACP_ALLOW_YOLO"]; got != explicit {
+				t.Fatalf("MUSE_CODE_ACP_ALLOW_YOLO = %q, want the environment's explicit %q", got, explicit)
+			}
+		})
+	}
 }
 
 func TestLaunchKeepsAnExplicitMuseExecutable(t *testing.T) {
@@ -204,6 +226,12 @@ func TestMuseACPFeatureMapping(t *testing.T) {
 	}
 	if got := cfg.SessionOptions(ports.ChatTurnSettings{}); len(got) != 0 {
 		t.Fatalf("session options without choices = %#v, want none", got)
+	}
+
+	got = cfg.LaunchSessionOptions(acpdriver.LaunchConfig{})
+	want = []acpdriver.SessionOption{{ID: "sandbox", Value: "disabled"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("launch session options = %#v, want only sandbox=disabled", got)
 	}
 }
 

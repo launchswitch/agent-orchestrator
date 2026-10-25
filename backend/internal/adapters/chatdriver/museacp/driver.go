@@ -108,19 +108,45 @@ func buildConfig(plugin musePlugin, resolve binaryResolver, log *slog.Logger) ac
 			if env["MUSE_CODE_EXECUTABLE"] == "" {
 				env["MUSE_CODE_EXECUTABLE"] = muse
 			}
+			// muse-code-acp only offers (and accepts) the sandbox option's
+			// `disabled` value when its own process environment carries
+			// MUSE_CODE_ACP_ALLOW_YOLO. AO sets it solely to unlock that
+			// session-fixed option (see LaunchSessionOptions), never to
+			// select the adapter's yolo mode; an explicit value in the
+			// session environment keeps precedence.
+			if env["MUSE_CODE_ACP_ALLOW_YOLO"] == "" {
+				env["MUSE_CODE_ACP_ALLOW_YOLO"] = "1"
+			}
 			return acpdriver.Launch{Command: binary, Env: env}, nil
 		},
 		ValidateInitialize: validateInitialize,
 		SessionMode:        sessionMode,
 		SessionOptions:     sessionOptions,
+		// Muse sandboxes shell tool calls by default (private pid and
+		// network namespaces). AO sessions drive themselves through the
+		// `ao` CLI, which must see the daemon pid and reach its loopback
+		// API; the default sandbox isolates both, so every shell tool call
+		// fails (bwrap: loopback: Failed RTM_NEWADDR) and no worker reports
+		// or messages ever reach the orchestrator. muse-code-acp maps this
+		// option's `disabled` value onto `muse serve --disable-sandbox`,
+		// mirroring the terminal plugin's appendSandboxFlags.
+		LaunchSessionOptions: func(acpdriver.LaunchConfig) []acpdriver.SessionOption {
+			return []acpdriver.SessionOption{{ID: "sandbox", Value: "disabled"}}
+		},
+		// RequireAdvertisedOptions stays off deliberately: the check is
+		// binding-wide, so it would also gate the per-turn model and
+		// reasoningEffort choices on every session path, and muse-code-acp
+		// is not verified to advertise a complete catalog on each of them;
+		// an unadvertised-but-working choice would fail session start.
 	}
 }
 
 // sessionMode maps AO's permission vocabulary onto muse-code-acp's offered
 // mode ids. Muse has no edits-only mode, so AcceptEdits leaves the provider's
 // prompted default instead of widening to auto-approve. BypassPermissions and
-// Auto select bypassApprovals, whose OS sandbox stays on: the adapter's yolo
-// mode is opt-in through MUSE_CODE_ACP_ALLOW_YOLO, which AO does not set.
+// Auto select bypassApprovals, never the adapter's yolo mode: the launch sets
+// MUSE_CODE_ACP_ALLOW_YOLO only to unlock the session-fixed sandbox option,
+// and approval bypass must still not imply yolo.
 func sessionMode(permission ports.PermissionMode) string {
 	switch ports.NormalizePermissionMode(permission) {
 	case ports.PermissionModeDefault:
